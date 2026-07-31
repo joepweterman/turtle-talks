@@ -1,0 +1,46 @@
+{
+  "name": "meeting-notes",
+  "version": "1.0.0",
+  "description": "Local meeting notes: records system audio + mic, transcribes with whisper.cpp, summarizes locally or via Claude",
+  "main": "main.js",
+  "author": "Joep Weterman",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "selftest": "electron . --selftest",
+    "setup": "powershell -ExecutionPolicy Bypass -File scripts/setup-whisper.ps1",
+    "icons": "node scripts/make-icons.js",
+    "process": "node scripts/process.js",
+    "dist": "electron-builder --win"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.74.0",
+    "dotenv": "^17.2.3",
+    "ffmpeg-static": "^5.2.0"
+  },
+  "devDependencies": {
+    "electron": "^38.2.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.joep.meetingnotes",
+    "productName": "MeetingNotes",
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**",
+      "lib/**",
+      "assets/**",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": true
+    }
+  }
+}
