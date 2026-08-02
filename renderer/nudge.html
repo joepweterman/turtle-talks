@@ -1,0 +1,85 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; background: transparent; overflow: hidden; }
+  #card {
+    box-sizing: border-box;
+    margin: 8px;
+    width: 344px;
+    border-radius: 16px;
+    background: #16352a;
+    color: #f5ecd3;
+    font-family: "Segoe UI", sans-serif;
+    padding: 14px 16px;
+    box-shadow: 0 6px 24px rgba(0,0,0,.4);
+    user-select: none;
+  }
+  #head { display: flex; align-items: center; gap: 10px; }
+  #head img { width: 34px; height: 34px; border-radius: 8px; }
+  #title { font-size: 14px; font-weight: 600; }
+  #sub { font-size: 12px; opacity: .75; }
+  #x {
+    margin-left: auto;
+    cursor: pointer;
+    opacity: .55;
+    font-size: 15px;
+    padding: 2px 6px;
+  }
+  #x:hover { opacity: 1; }
+  #buttons { display: flex; gap: 8px; margin-top: 12px; }
+  .btn {
+    flex: 1;
+    text-align: center;
+    background: #f5ecd3;
+    color: #16352a;
+    border-radius: 9px;
+    padding: 8px 0;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .btn:hover { background: #fff8e6; }
+  .btn.ghost { background: transparent; color: #f5ecd3; border: 1px solid rgba(245,236,211,.45); }
+  .btn.ghost:hover { background: rgba(245,236,211,.12); }
+</style>
+</head>
+<body>
+  <div id="card">
+    <div id="head">
+      <img src="../assets/icon-source.png" alt="">
+      <div>
+        <div id="title">Meeting detected</div>
+        <div id="sub">Take notes with Turtle Talks?</div>
+      </div>
+      <div id="x" onclick="window.api.nudgeAction('dismiss')">✕</div>
+    </div>
+    <div id="buttons"></div>
+  </div>
+  <script>
+    const title = document.getElementById('title');
+    const sub = document.getElementById('sub');
+    const buttons = document.getElementById('buttons');
+    function setNudge(mode, appName) {
+      if (mode === 'start') {
+        title.textContent = appName ? `Meeting detected · ${appName}` : 'Meeting detected';
+        sub.textContent = 'Take notes with Turtle Talks?';
+        buttons.innerHTML =
+          '<div class="btn" id="btn-en">English notes</div>' +
+          '<div class="btn" id="btn-nl">Nederlandse notities</div>';
+        document.getElementById('btn-en').onclick = () => window.api.nudgeAction('start', 'en');
+        document.getElementById('btn-nl').onclick = () => window.api.nudgeAction('start', 'nl');
+      } else {
+        title.textContent = 'Meeting ended?';
+        sub.textContent = 'Turtle Talks is still recording.';
+        buttons.innerHTML =
+          '<div class="btn" id="btn-stop">Stop &amp; make notes</div>' +
+          '<div class="btn ghost" id="btn-keep">Keep recording</div>';
+        document.getElementById('btn-stop').onclick = () => window.api.nudgeAction('stop');
+        document.getElementById('btn-keep').onclick = () => window.api.nudgeAction('dismiss');
+      }
+    }
+  </script>
+</body>
+</html>

@@ -28,20 +28,29 @@ that is skipped if you run [Ollama](https://ollama.com) locally.
 
 Tray icon: cream ring = idle, red = recording, amber = making notes.
 
+## Meeting detection
+
+When another app starts using your microphone (Teams, Zoom, a Meet tab…),
+a Turtle Talks card appears top-right: *"Meeting detected — take notes?"*
+with **English notes** / **Nederlandse notities** buttons. When the meeting
+ends while you're still recording, it nudges again: *"Meeting ended? Stop &
+make notes."* Dismissing it never interrupts anything, and it never records
+without you clicking.
+
 ## Dictation anywhere (Wispr Flow-style)
 
-Press **Ctrl+Alt+Space** in any app (mail, Slack, browser…), speak, press it
-again. A small pill at the bottom of the screen shows listening / transcribing
-status, and the transcribed text is pasted at your cursor (and left in the
-clipboard as a fallback). The language is **auto-detected per utterance**, so
-you can dictate Dutch in one message and English in the next without touching
-any setting.
+Press **Ctrl+Alt+T** (T for turtle) in any app (mail, Slack, browser…),
+speak, press it again. A small pill at the bottom of the screen shows
+listening / transcribing status, and the transcribed text is pasted at your
+cursor (and left in the clipboard as a fallback). The language is
+**auto-detected per utterance**, so you can dictate Dutch in one message and
+English in the next without touching any setting.
 
 Dictation uses the faster `small` whisper model by default so short utterances
 come back in a few seconds. Configure in `.env`:
 
 ```
-DICTATE_HOTKEY=Control+Alt+Space   # any Electron accelerator
+DICTATE_HOTKEY=Control+Alt+T       # any Electron accelerator
 DICTATE_MODEL=ggml-small.bin       # ggml-medium.bin for max accuracy
 DICTATE_LANG=auto                  # or force nl / en
 ```

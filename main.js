@@ -13,17 +13,23 @@ require('dotenv').config({ path: path.join(BASE_DIR, '.env'), quiet: true });
 const { toWav, transcribe } = require('./lib/transcribe');
 const { summarize } = require('./lib/summarize');
 const { buildMarkdown } = require('./lib/notes');
+const { MeetingWatch } = require('./lib/meetingwatch');
 
 const SELFTEST = process.argv.includes('--selftest');
 const DICTTEST = process.argv.includes('--dicttest');
+const NUDGETEST = process.argv.includes('--nudgetest');
+const QUIT_AFTER_NOTES = SELFTEST || NUDGETEST;
 
-const DICT_HOTKEY = process.env.DICTATE_HOTKEY || 'Control+Alt+Space';
+const DICT_HOTKEY = process.env.DICTATE_HOTKEY || 'Control+Alt+T';
 const DICT_LANG = process.env.DICTATE_LANG || 'auto'; // auto-detect NL vs EN per utterance
 const DICT_MODEL = process.env.DICTATE_MODEL || 'ggml-small.bin';
 
 let tray = null;
 let win = null;
 let overlay = null;
+let nudgeWin = null;
+let nudgeHideTimer = null;
+const watcher = new MeetingWatch();
 let state = 'idle'; // meeting recorder: idle | recording | processing
 let rec = null;     // { stamp, lang, webmPath, stream }
 let dict = null;    // dictation in progress: { webmPath, stream }
@@ -90,6 +96,7 @@ function updateTray() {
 
 function startRecording(lang) {
   if (state !== 'idle') return;
+  hideNudge();
   fs.mkdirSync(NOTES_DIR, { recursive: true });
   let stamp = timestamp();
   let webmPath = path.join(NOTES_DIR, `${stamp}.webm`);
@@ -117,7 +124,7 @@ function failRecording(msg) {
   rec = null;
   notify('Turtle Talks — recording failed', msg);
   setState('idle');
-  if (SELFTEST) { console.log('[selftest] FAILED'); app.exit(1); }
+  if (QUIT_AFTER_NOTES) { console.log('[selftest] FAILED'); app.exit(1); }
 }
 
 ipcMain.on('rec:chunk', (e, data) => { if (rec) rec.stream.write(Buffer.from(data)); });
@@ -134,10 +141,10 @@ ipcMain.on('rec:done', async () => {
   } catch (err) {
     console.error('Processing failed:', err);
     notify('Turtle Talks — failed', String(err.message || err), NOTES_DIR);
-    if (SELFTEST) { app.exit(1); }
+    if (QUIT_AFTER_NOTES) { app.exit(1); }
   }
   setState('idle');
-  if (SELFTEST) { console.log('[selftest] DONE'); setTimeout(() => app.quit(), 500); }
+  if (QUIT_AFTER_NOTES) { console.log('[selftest] DONE'); setTimeout(() => app.quit(), 500); }
 });
 
 async function processRecording(job) {
@@ -299,10 +306,66 @@ ipcMain.on('dict:done', async () => {
   }
 });
 
+// ---------- meeting-detected nudge (Granola-style) ----------
+
+function createNudge() {
+  nudgeWin = new BrowserWindow({
+    width: 360,
+    height: 130,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    focusable: false, // clickable, but never steals keyboard focus from the meeting
+    resizable: false,
+    movable: false,
+    show: false,
+    hasShadow: false,
+    webPreferences: { preload: path.join(__dirname, 'preload.js') },
+  });
+  nudgeWin.setAlwaysOnTop(true, 'screen-saver');
+  nudgeWin.loadFile('renderer/nudge.html');
+}
+
+function showNudge(mode, appName) {
+  if (!nudgeWin) return;
+  const wa = screen.getPrimaryDisplay().workArea;
+  nudgeWin.setBounds({ x: wa.x + wa.width - 360 - 12, y: wa.y + 12, width: 360, height: 130 });
+  nudgeWin.webContents.executeJavaScript(`setNudge(${JSON.stringify(mode)}, ${JSON.stringify(appName || '')})`).catch(() => {});
+  nudgeWin.showInactive();
+  clearTimeout(nudgeHideTimer);
+  nudgeHideTimer = setTimeout(hideNudge, 30000);
+}
+
+function hideNudge() {
+  clearTimeout(nudgeHideTimer);
+  if (nudgeWin) nudgeWin.hide();
+}
+
+ipcMain.on('nudge:action', (e, action, arg) => {
+  hideNudge();
+  if (action === 'start') startRecording(arg === 'nl' ? 'nl' : 'en');
+  else if (action === 'stop') stopRecording();
+  // 'dismiss' → just hidden
+});
+
+watcher.on('meeting-start', (apps) => {
+  console.log('[nudge] meeting detected:', apps.join(', '));
+  if (state === 'idle') showNudge('start', apps[0]);
+});
+watcher.on('meeting-stop', () => {
+  console.log('[nudge] meeting ended');
+  if (state === 'recording') showNudge('stop');
+  else hideNudge();
+});
+
 // ---------- app lifecycle ----------
 
 app.on('window-all-closed', () => { /* keep running in the tray */ });
-app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('will-quit', () => { if (app.isReady()) globalShortcut.unregisterAll(); });
+app.on('second-instance', () => {
+  notify('Turtle Talks', 'Already running — find the turtle in the tray, next to the clock.');
+});
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -324,6 +387,7 @@ if (!app.requestSingleInstanceLock()) {
     });
     win.loadFile('renderer/recorder.html');
     createOverlay();
+    createNudge();
     tray = new Tray(icon('idle'));
     updateTray();
 
@@ -331,6 +395,11 @@ if (!app.requestSingleInstanceLock()) {
     if (!ok) {
       console.error(`could not register dictation hotkey ${DICT_HOTKEY} (already in use?)`);
       notify('Turtle Talks', `Dictation hotkey ${DICT_HOTKEY} is taken by another app — set DICTATE_HOTKEY in .env`);
+    }
+
+    if (!SELFTEST && !DICTTEST) watcher.start();
+    if (!SELFTEST && !DICTTEST && !NUDGETEST) {
+      notify('Turtle Talks is running', `Find the turtle in the tray to record meetings. Dictate anywhere with ${DICT_HOTKEY.replace(/Control/g, 'Ctrl')}.`);
     }
 
     if (SELFTEST) {
@@ -347,6 +416,19 @@ if (!app.requestSingleInstanceLock()) {
         console.log(`[dicttest] dictating ${secs}s (lang=${DICT_LANG}, model=${DICT_MODEL})…`);
         toggleDictation();
         setTimeout(() => toggleDictation(), secs * 1000);
+      });
+    }
+    if (NUDGETEST) {
+      // when the nudge appears, click its real English button, record, stop
+      watcher.on('meeting-start', () => {
+        setTimeout(() => {
+          console.log('[nudgetest] clicking English notes button…');
+          nudgeWin.webContents.executeJavaScript("document.getElementById('btn-en').click()").catch((e) => {
+            console.error('[nudgetest] click failed:', e);
+            app.exit(1);
+          });
+          setTimeout(() => stopRecording(), Number(process.env.SELFTEST_SECONDS || 10) * 1000);
+        }, 2000);
       });
     }
   });

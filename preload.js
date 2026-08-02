@@ -8,4 +8,5 @@ contextBridge.exposeInMainWorld('api', {
   dictChunk: (buf) => ipcRenderer.send('dict:chunk', new Uint8Array(buf)),
   dictDone: () => ipcRenderer.send('dict:done'),
   dictError: (msg) => ipcRenderer.send('dict:error', String(msg)),
+  nudgeAction: (action, arg) => ipcRenderer.send('nudge:action', action, arg),
 });
