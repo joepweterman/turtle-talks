@@ -1,0 +1,62 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; background: transparent; overflow: hidden; }
+  #pill {
+    box-sizing: border-box;
+    margin: 8px auto;
+    width: 320px;
+    height: 48px;
+    border-radius: 24px;
+    background: #16352a;
+    color: #f5ecd3;
+    font: 500 14px/48px "Segoe UI", sans-serif;
+    text-align: center;
+    box-shadow: 0 4px 18px rgba(0,0,0,.35);
+    user-select: none;
+  }
+  #dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-right: 9px;
+    vertical-align: middle;
+    background: #ef4444;
+  }
+  .pulse { animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
+</style>
+</head>
+<body>
+  <div id="pill"><span id="dot" class="pulse"></span><span id="label">Listening…</span></div>
+  <script>
+    const dot = document.getElementById('dot');
+    const label = document.getElementById('label');
+    function setMode(mode, extra) {
+      dot.className = 'pulse';
+      if (mode === 'listening') {
+        dot.style.background = '#ef4444';
+        label.textContent = `Listening — ${extra || 'hotkey'} to stop`;
+      } else if (mode === 'transcribing') {
+        dot.style.background = '#f59e0b';
+        label.textContent = 'Transcribing…';
+      } else if (mode === 'done') {
+        dot.className = '';
+        dot.style.background = '#8fa86b';
+        label.textContent = 'Pasted ✓ (also in clipboard)';
+      } else if (mode === 'empty') {
+        dot.className = '';
+        dot.style.background = '#6b7280';
+        label.textContent = 'Heard nothing';
+      } else {
+        dot.className = '';
+        dot.style.background = '#ef4444';
+        label.textContent = extra ? `Error: ${extra}` : 'Error';
+      }
+    }
+  </script>
+</body>
+</html>

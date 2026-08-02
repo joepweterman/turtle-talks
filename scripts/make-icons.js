@@ -66,11 +66,11 @@ const C = SIZE / 2;
 const dist = (x, y) => Math.hypot(x - C, y - C);
 
 const icons = {
-  // idle: light gray ring
+  // idle: cream ring (Turtle Talks brand)
   idle: (x, y) => {
     const d = dist(x, y);
     const a = clamp01(13.5 - d) * clamp01(d - 8.5);
-    return [230, 230, 230, a];
+    return [245, 236, 211, a];
   },
   // rec: solid red disc
   rec: (x, y) => [239, 68, 68, clamp01(13.5 - dist(x, y))],

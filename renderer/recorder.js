@@ -81,6 +81,45 @@ window.__stop = () => {
   if (recorder && recorder.state !== 'inactive') recorder.stop();
 };
 
+// ---------- dictation: mic only, independent of the meeting recorder ----------
+let dictRecorder = null;
+let dictStream = null;
+let dictQueue = Promise.resolve();
+
+window.__dictStart = async () => {
+  try {
+    dictStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+    dictRecorder = new MediaRecorder(dictStream, {
+      mimeType: 'audio/webm;codecs=opus',
+      audioBitsPerSecond: 64000,
+    });
+    dictRecorder.ondataavailable = (ev) => {
+      if (!ev.data || ev.data.size === 0) return;
+      dictQueue = dictQueue.then(async () => window.api.dictChunk(await ev.data.arrayBuffer()));
+    };
+    dictRecorder.onstop = async () => {
+      await dictQueue;
+      dictStream.getTracks().forEach((t) => t.stop());
+      dictStream = null;
+      dictRecorder = null;
+      window.api.dictDone();
+    };
+    dictRecorder.start(500);
+    window.api.log('dictation started');
+  } catch (err) {
+    if (dictStream) dictStream.getTracks().forEach((t) => t.stop());
+    dictStream = null;
+    dictRecorder = null;
+    window.api.dictError(err.message || String(err));
+  }
+};
+
+window.__dictStop = () => {
+  if (dictRecorder && dictRecorder.state !== 'inactive') dictRecorder.stop();
+};
+
 function cleanup() {
   streams.forEach((s) => s.getTracks().forEach((t) => t.stop()));
   streams = [];

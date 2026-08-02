@@ -1,9 +1,11 @@
-# MeetingNotes
+# Turtle Talks 🐢
 
-A local, private meeting-notes app for Windows. It sits in the system tray,
-records **system audio + microphone**, transcribes with **whisper.cpp** on your
-own machine, and writes a markdown note with a 5-bullet summary, decisions, and
-action items.
+A local, private meeting-notes and dictation app for Windows. It sits in the
+system tray, records **system audio + microphone**, transcribes with
+**whisper.cpp** on your own machine, and writes a markdown note with a 5-bullet
+summary, decisions, and action items. It also does **dictation anywhere**:
+press a hotkey in any app, speak Dutch or English, and the text is typed at
+your cursor.
 
 No accounts, no cloud storage, no telemetry. Everything stays on this machine.
 The only optional network calls are to Anthropic's API for summaries — and even
@@ -24,7 +26,25 @@ that is skipped if you run [Ollama](https://ollama.com) locally.
      then the full transcript
    - `2026-07-31-1430.webm` — the audio, kept next to the note
 
-Tray icon: gray ring = idle, red = recording, amber = making notes.
+Tray icon: cream ring = idle, red = recording, amber = making notes.
+
+## Dictation anywhere (Wispr Flow-style)
+
+Press **Ctrl+Alt+Space** in any app (mail, Slack, browser…), speak, press it
+again. A small pill at the bottom of the screen shows listening / transcribing
+status, and the transcribed text is pasted at your cursor (and left in the
+clipboard as a fallback). The language is **auto-detected per utterance**, so
+you can dictate Dutch in one message and English in the next without touching
+any setting.
+
+Dictation uses the faster `small` whisper model by default so short utterances
+come back in a few seconds. Configure in `.env`:
+
+```
+DICTATE_HOTKEY=Control+Alt+Space   # any Electron accelerator
+DICTATE_MODEL=ggml-small.bin       # ggml-medium.bin for max accuracy
+DICTATE_LANG=auto                  # or force nl / en
+```
 
 ## Install
 
@@ -38,7 +58,7 @@ npm run setup     # downloads whisper.cpp + the medium model (~1.5 GB, resumable
 npm run dist      # builds the installer into dist\
 ```
 
-Run the installer from `dist\` — it adds **MeetingNotes** to the Start menu and
+Run the installer from `dist\` — it adds **Turtle Talks** to the Start menu and
 desktop. The installed app looks for `whisper\` and `.env` in
 `C:\Users\<you>\MeetingNotes\` (move them there after `npm run setup`; running
 from source finds them in either place).
