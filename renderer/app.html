@@ -128,6 +128,35 @@
   }
   #ed-body:focus { border-color: #235244; }
 
+  /* live transcript view */
+  #livewrap { max-width: 760px; }
+  .turn { margin: 14px 0; }
+  .turn .who { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; font-weight: 700; color: #235244; }
+  .turn .who.sys { color: #8a6d1d; }
+  .turn p { margin: 3px 0 0; font-size: 14px; }
+  #livehint { font-family: 'Lora', serif; font-style: italic; color: var(--muted); margin-top: 26px; }
+
+  /* settings */
+  #setwrap { max-width: 640px; display: flex; flex-direction: column; gap: 14px; }
+  .set-row { display: flex; flex-direction: column; gap: 5px; }
+  .set-row label { font-size: 12.5px; font-weight: 650; }
+  .set-row .help { font-size: 11.5px; color: var(--muted); }
+  .set-row input[type="text"], .set-row input[type="password"], .set-row select, .set-row textarea {
+    font-family: 'Hanken Grotesk', sans-serif; font-size: 13.5px; color: var(--ink);
+    background: var(--card); border: 1px solid var(--line); border-radius: 9px; padding: 8px 11px; outline: none;
+  }
+  .set-row textarea { font-family: 'JetBrains Mono', monospace; font-size: 12px; min-height: 64px; resize: vertical; }
+  .set-row input:focus, .set-row select:focus, .set-row textarea:focus { border-color: #235244; }
+  #set-save {
+    align-self: flex-start; cursor: pointer; border: none; margin-top: 4px;
+    background: var(--green); color: var(--cream); font-weight: 650; font-size: 13.5px;
+    border-radius: 9px; padding: 10px 22px; font-family: 'Hanken Grotesk', sans-serif;
+    transition: background .16s var(--ease);
+  }
+  #set-save:hover { background: var(--green-2); }
+  #set-msg { font-size: 12.5px; color: #235244; }
+  #set-msg.err { color: var(--red); }
+
   /* dictation history view */
   .day { font-family: 'Lora', serif; font-size: 15px; font-weight: 600; color: #235244; margin: 22px 0 6px; }
   .drow {
@@ -182,6 +211,7 @@
       <button class="mini" id="b-audio" style="display:none">Play audio</button>
       <button class="mini" id="b-file" style="display:none">Open file</button>
       <button class="mini" id="b-folder">Open folder</button>
+      <button class="mini" id="b-settings">Settings</button>
       <button class="mini primary" id="b-save" style="display:none">Save</button>
       <button class="mini" id="b-cancel" style="display:none">Cancel</button>
     </div>
@@ -197,9 +227,11 @@
   const $ = (id) => document.getElementById(id);
   let notes = [];
   let selected = null;   // filename of open note
-  let mode = 'note';     // note | dicts | edit
+  let mode = 'note';     // note | dicts | edit | live | settings
   let dictAll = [];
   let currentMd = '';
+  let appState = 'idle';
+  let liveTurns = [];
 
   const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -254,9 +286,10 @@
     $('b-edit').style.display = mode === 'note' && selected ? '' : 'none';
     $('b-audio').style.display = mode === 'note' && selected && currentMd.includes('.webm') ? '' : 'none';
     $('b-file').style.display = mode === 'note' && selected ? '' : 'none';
-    $('b-folder').style.display = mode === 'edit' ? 'none' : '';
+    $('b-folder').style.display = mode === 'edit' || mode === 'settings' ? 'none' : '';
+    $('b-settings').style.display = mode === 'edit' || mode === 'settings' ? 'none' : '';
     $('b-save').style.display = mode === 'edit' ? '' : 'none';
-    $('b-cancel').style.display = mode === 'edit' ? '' : 'none';
+    $('b-cancel').style.display = mode === 'edit' || mode === 'settings' ? '' : 'none';
   }
 
   async function refreshNotes(selectFile) {
@@ -358,12 +391,108 @@
   }
 
   function renderState(s) {
+    const prev = appState;
+    appState = s.state;
     $('row-start').style.display = s.state === 'idle' ? '' : 'none';
     $('row-stop').style.display = s.state === 'recording' ? '' : 'none';
     $('stdot').className = s.state === 'recording' ? 'rec' : (s.state === 'processing' ? 'busy' : '');
     $('sttext').textContent = s.state === 'recording'
       ? (s.recLang === 'nl' ? 'Aan het opnemen (NL)' : 'Recording (EN)')
       : (s.state === 'processing' ? 'Making notes' : 'Idle');
+    if (s.state === 'recording' && prev !== 'recording') openLive();
+  }
+
+  // ---------- live transcript view ----------
+  function openLive() {
+    mode = 'live';
+    $('view-title').textContent = 'Live transcript';
+    $('content').innerHTML = '<div id="livewrap"></div><div id="livehint">Listening. The transcript appears here as the meeting goes, a couple of minutes at a time.</div>';
+    renderLive(liveTurns);
+    setButtons();
+  }
+
+  function renderLive(turns) {
+    liveTurns = turns || [];
+    if (mode !== 'live') return;
+    const wrap = document.getElementById('livewrap');
+    if (!wrap) return;
+    wrap.innerHTML = liveTurns.map((t) =>
+      `<div class="turn"><span class="who ${t.track}">${esc(t.label)} · ${t.time}</span><p>${esc(t.text)}</p></div>`,
+    ).join('');
+    if (liveTurns.length) document.getElementById('livehint').textContent = '';
+    const c = $('content');
+    c.scrollTop = c.scrollHeight;
+  }
+
+  // ---------- settings ----------
+  async function openSettings() {
+    mode = 'settings';
+    $('view-title').textContent = 'Settings';
+    const { settings: s, models } = await window.api.getSettings();
+    const modelOpts = (sel, extra) => (extra || []).concat(models)
+      .map((m) => `<option value="${esc(m.value !== undefined ? m.value : m)}" ${((m.value !== undefined ? m.value : m) === sel) ? 'selected' : ''}>${esc(m.label || m)}</option>`).join('');
+    $('content').innerHTML = `<div id="setwrap" class="fade">
+      <div class="set-row"><label>Your name</label>
+        <div class="help">Used as your speaker label in transcripts and to help whisper recognise it.</div>
+        <input type="text" id="s-yourName" value="${esc(s.yourName)}"></div>
+      <div class="set-row"><label>Vocabulary</label>
+        <div class="help">Names and jargon whisper should know, comma separated. Fixes things like "total talks".</div>
+        <textarea id="s-vocabulary">${esc(s.vocabulary)}</textarea></div>
+      <div class="set-row"><label>Dictation hotkey</label>
+        <div class="help">Electron accelerator format, e.g. Control+Alt+T or Control+Shift+D.</div>
+        <input type="text" id="s-dictHotkey" value="${esc(s.dictHotkey)}"></div>
+      <div class="set-row"><label>Dictation language</label>
+        <select id="s-dictLang">
+          <option value="auto" ${s.dictLang === 'auto' ? 'selected' : ''}>Auto-detect (Dutch / English)</option>
+          <option value="nl" ${s.dictLang === 'nl' ? 'selected' : ''}>Nederlands</option>
+          <option value="en" ${s.dictLang === 'en' ? 'selected' : ''}>English</option>
+        </select></div>
+      <div class="set-row"><label>Dictation model</label>
+        <select id="s-dictModel">${modelOpts(s.dictModel)}</select></div>
+      <div class="set-row"><label>Meeting model</label>
+        <select id="s-meetingModel">${modelOpts(s.meetingModel, [{ value: '', label: 'Auto (large-v3-turbo, falls back to medium)' }])}</select></div>
+      <div class="set-row"><label>Summaries</label>
+        <select id="s-summarizer">
+          <option value="auto" ${s.summarizer === 'auto' ? 'selected' : ''}>Auto (Ollama if running, else Claude)</option>
+          <option value="ollama" ${s.summarizer === 'ollama' ? 'selected' : ''}>Ollama only (fully local)</option>
+          <option value="anthropic" ${s.summarizer === 'anthropic' ? 'selected' : ''}>Claude only</option>
+          <option value="none" ${s.summarizer === 'none' ? 'selected' : ''}>No summaries (transcript only)</option>
+        </select></div>
+      <div class="set-row"><label>Ollama model</label>
+        <input type="text" id="s-ollamaModel" value="${esc(s.ollamaModel)}"></div>
+      <div class="set-row"><label>Anthropic API key</label>
+        <div class="help">Only used when summaries go through Claude. Stored locally in MeetingNotes\\settings.json.</div>
+        <input type="password" id="s-anthropicKey" value="${esc(s.anthropicKey)}"></div>
+      <button id="set-save">Save settings</button>
+      <div id="set-msg"></div>
+    </div>`;
+    document.getElementById('set-save').onclick = saveSettings;
+    setButtons();
+  }
+
+  async function saveSettings() {
+    const val = (id) => document.getElementById(id).value;
+    const res = await window.api.saveSettings({
+      yourName: val('s-yourName').trim() || 'You',
+      vocabulary: val('s-vocabulary').trim(),
+      dictHotkey: val('s-dictHotkey').trim() || 'Control+Alt+T',
+      dictLang: val('s-dictLang'),
+      dictModel: val('s-dictModel'),
+      meetingModel: val('s-meetingModel'),
+      summarizer: val('s-summarizer'),
+      ollamaModel: val('s-ollamaModel').trim(),
+      anthropicKey: val('s-anthropicKey').trim(),
+    });
+    const msg = document.getElementById('set-msg');
+    if (res.ok) {
+      msg.className = '';
+      msg.textContent = 'Saved.';
+      const st = await window.api.getState();
+      $('hotkey').textContent = st.hotkey;
+    } else {
+      msg.className = 'err';
+      msg.textContent = res.error || 'Could not save.';
+    }
   }
 
   $('b-en').onclick = () => window.api.start('en');
@@ -374,14 +503,16 @@
   $('b-audio').onclick = () => selected && window.api.openRel(selected.replace(/\.md$/, '.webm'));
   $('b-edit').onclick = openEditor;
   $('b-save').onclick = saveEditor;
-  $('b-cancel').onclick = () => openNote(selected);
+  $('b-cancel').onclick = () => (selected ? openNote(selected) : openDicts());
+  $('b-settings').onclick = openSettings;
   $('dict-all').onclick = openDicts;
 
   window.api.onState(renderState);
   window.api.onProgress((t) => { if (t) $('sttext').textContent = t; });
-  window.api.onNotesChanged((f) => { if (mode !== 'edit') refreshNotes(f); else refreshNotes(); });
+  window.api.onNotesChanged((f) => { if (mode !== 'edit' && mode !== 'settings') refreshNotes(f); else refreshNotes(); });
   window.api.onSelectNote((f) => openNote(f));
   window.api.onDict((h) => { dictAll = h; renderDictPeek(); });
+  window.api.onLive(renderLive);
 
   (async () => {
     const s = await window.api.getState();

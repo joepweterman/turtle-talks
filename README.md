@@ -24,17 +24,28 @@ note, hit Edit, change the title or the markdown body, Save writes it straight
 back to the file. "View all dictations" shows everything you've ever dictated
 (stored locally in `MeetingNotes\dictations.jsonl`), with per-item copy.
 
+The **Settings** screen (top right) covers your name (used as your speaker
+label), a personal **vocabulary** so whisper recognises names and jargon, the
+dictation hotkey and language, model choices, and the summarizer (local Ollama,
+Claude, or none). Settings live in `MeetingNotes\settings.json`.
+
 Typography is the DIVR set (Lora, Hanken Grotesk, JetBrains Mono), bundled
 locally so the app stays fully offline.
 
 1. Click **Record EN** / **Opname NL** in the window (or right-click the tray
    icon). Picking the language up front is what tells Whisper which language
    to transcribe, so Dutch meetings don't get mangled.
-2. System audio (whatever plays through your speakers/headset — Teams, Meet,
-   Zoom) and your microphone are mixed and recorded.
-3. Click **Stop and make notes**. The app converts the audio, runs whisper.cpp,
-   generates the summary, and shows a Windows notification when the note is
-   ready. Clicking the notification opens it.
+2. System audio (Teams, Meet, Zoom…) and your microphone are recorded as
+   **two separate tracks**, and transcribed **live in ~3-minute chunks while
+   the meeting runs** — you can watch the transcript grow in the window.
+   Because the tracks are separate, the transcript is labeled: your words
+   under your name, the other side under "Them". (Wear a headset for the
+   cleanest split; without one, an echo filter removes speaker bleed.)
+3. Click **Stop and make notes**. Since transcription happened during the
+   meeting, the note usually lands moments later: summary, decisions, action
+   items with owners taken from the speaker labels, and the full labeled
+   transcript. Long meetings are summarized map-reduce style so quality holds
+   up over an hour of audio.
 4. Everything lands in `C:\Users\<you>\MeetingNotes\`:
    - `2026-07-31-1430.md` — summary + decisions + action items, then `---`,
      then the full transcript

@@ -10,10 +10,11 @@ const NOTES_DIR = path.join(os.homedir(), 'MeetingNotes');
 const BASE_DIR = app.isPackaged ? NOTES_DIR : __dirname;
 require('dotenv').config({ path: path.join(BASE_DIR, '.env'), quiet: true });
 
-const { toWav, transcribe } = require('./lib/transcribe');
+const { toWav, transcribe, transcribeSegments } = require('./lib/transcribe');
 const { summarize } = require('./lib/summarize');
-const { buildMarkdown } = require('./lib/notes');
+const { buildMarkdown, buildTurns, turnsToMarkdown, speakerLabels, fmtMs, filterEcho } = require('./lib/notes');
 const { MeetingWatch } = require('./lib/meetingwatch');
+const config = require('./lib/config');
 
 const SELFTEST = process.argv.includes('--selftest');
 const DICTTEST = process.argv.includes('--dicttest');
@@ -28,9 +29,8 @@ if (app.isPackaged && !SELFTEST && !DICTTEST && !NUDGETEST) {
   console.error = () => {};
 }
 
-const DICT_HOTKEY = process.env.DICTATE_HOTKEY || 'Control+Alt+T';
-const DICT_LANG = process.env.DICTATE_LANG || 'auto'; // auto-detect NL vs EN per utterance
-const DICT_MODEL = process.env.DICTATE_MODEL || 'ggml-small.bin';
+const cfg = () => config.get();
+const hotkeyLabel = () => cfg().dictHotkey.replace(/Control/g, 'Ctrl');
 
 let tray = null;
 let win = null;
@@ -40,14 +40,14 @@ let nudgeHideTimer = null;
 let mainWin = null;
 let quitting = false;
 const watcher = new MeetingWatch();
+let state = 'idle'; // meeting recorder: idle | recording | processing
+let rec = null;     // active recording (see startRecording)
+let dict = null;    // dictation in progress: { webmPath, stream }
+let dictBusy = false;
 
 function uiSend(channel, ...args) {
   if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send(channel, ...args);
 }
-let state = 'idle'; // meeting recorder: idle | recording | processing
-let rec = null;     // { stamp, lang, webmPath, stream }
-let dict = null;    // dictation in progress: { webmPath, stream }
-let dictBusy = false;
 
 const icons = {};
 function icon(name) {
@@ -65,6 +65,31 @@ function notify(title, body, openPath) {
   const n = new Notification({ title, body });
   if (openPath) n.on('click', () => shell.openPath(openPath));
   n.show();
+}
+
+function ffmpegPath() {
+  return require('ffmpeg-static').replace('app.asar', 'app.asar.unpacked');
+}
+
+function runCmd(cmd, args, opts = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { windowsHide: true, ...opts });
+    let err = '';
+    child.stderr.on('data', (d) => { err += d; });
+    child.stdout.on('data', () => {});
+    child.on('error', reject);
+    child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`${path.basename(cmd)} exited ${code}: ${err.slice(-500)}`))));
+  });
+}
+
+function runPs(command) {
+  return new Promise((resolve) => {
+    const ps = spawn('powershell.exe', ['-NoProfile', '-Command', command], { windowsHide: true });
+    let out = '';
+    ps.stdout.on('data', (d) => { out += d; });
+    ps.on('close', () => resolve(out.trim()));
+    ps.on('error', () => resolve(''));
+  });
 }
 
 function setState(next) {
@@ -95,11 +120,11 @@ function updateTray() {
   } else {
     tray.setImage(icon('busy'));
     tray.setToolTip('Turtle Talks — making notes…');
-    items.push({ label: 'Transcribing & summarizing…', enabled: false }, { type: 'separator' });
+    items.push({ label: 'Making notes…', enabled: false }, { type: 'separator' });
   }
   items.push(
     { label: 'Open Turtle Talks', click: () => showMainWindow() },
-    { label: `Dictate anywhere: ${DICT_HOTKEY.replace(/Control/g, 'Ctrl')}`, click: () => toggleDictation() },
+    { label: `Dictate anywhere: ${hotkeyLabel()}`, click: () => toggleDictation() },
     { type: 'separator' },
     { label: 'Open notes folder', click: () => { fs.mkdirSync(NOTES_DIR, { recursive: true }); shell.openPath(NOTES_DIR); } },
     { type: 'separator' },
@@ -108,50 +133,134 @@ function updateTray() {
   tray.setContextMenu(Menu.buildFromTemplate(items));
 }
 
-// ---------- meeting recorder ----------
+// ---------- meeting recorder: two tracks, live-transcribed in segments ----------
+
+async function meetingWindowTitle() {
+  const out = await runPs(
+    "Get-Process ms-teams,Teams,Zoom,chrome,msedge,firefox,slack,Discord,Webex -ErrorAction SilentlyContinue | Where-Object MainWindowTitle | Select-Object -ExpandProperty MainWindowTitle",
+  );
+  const titles = out.split(/\r?\n/).map((t) => t.trim()).filter(Boolean);
+  return titles[0] ? titles[0].slice(0, 100) : '';
+}
 
 function startRecording(lang) {
   if (state !== 'idle') return;
   hideNudge();
   fs.mkdirSync(NOTES_DIR, { recursive: true });
   let stamp = timestamp();
-  let webmPath = path.join(NOTES_DIR, `${stamp}.webm`);
-  if (fs.existsSync(webmPath)) {
+  if (fs.existsSync(path.join(NOTES_DIR, `${stamp}.webm`)) || fs.existsSync(path.join(NOTES_DIR, `${stamp}.md`))) {
     stamp = `${stamp}-${String(new Date().getSeconds()).padStart(2, '0')}`;
-    webmPath = path.join(NOTES_DIR, `${stamp}.webm`);
   }
-  rec = { stamp, lang, webmPath, stream: fs.createWriteStream(webmPath) };
+  rec = {
+    stamp,
+    lang,
+    startedAt: Date.now(),
+    segs: new Map(),      // "track:index" → {file, stream, startMs, track, index}
+    results: [],          // transcribed: {track, fromMs, toMs, text} absolute ms
+    liveQueue: Promise.resolve(),
+    context: '',
+  };
+  meetingWindowTitle().then((t) => { if (rec) rec.context = t; });
   setState('recording');
+  uiSend('ui:live', []);
   // userGesture=true so getDisplayMedia is allowed without a click in the hidden window
-  win.webContents.executeJavaScript(`window.__start(${JSON.stringify(lang)})`, true)
+  win.webContents.executeJavaScript('window.__start()', true)
     .catch((e) => failRecording(String(e && e.message ? e.message : e)));
 }
 
 function stopRecording() {
   if (state !== 'recording') return;
   setState('processing');
+  uiSend('ui:progress', 'Finishing transcription…');
   win.webContents.executeJavaScript('window.__stop()', true)
     .catch((e) => console.error('stop failed:', e));
 }
 
 function failRecording(msg) {
   console.error('Recording error:', msg);
-  if (rec) { try { rec.stream.close(); } catch {} }
+  if (rec) {
+    for (const seg of rec.segs.values()) { try { seg.stream.close(); } catch {} }
+  }
   rec = null;
   notify('Turtle Talks — recording failed', msg);
   setState('idle');
   if (QUIT_AFTER_NOTES) { console.log('[selftest] FAILED'); app.exit(1); }
 }
 
-ipcMain.on('rec:chunk', (e, data) => { if (rec) rec.stream.write(Buffer.from(data)); });
+function segKey(track, index) { return `${track}:${index}`; }
+
+ipcMain.on('rec:seg-start', (e, track, index, startMs) => {
+  if (!rec) return;
+  const file = path.join(NOTES_DIR, `${rec.stamp}.${track}.${String(index).padStart(3, '0')}.webm`);
+  rec.segs.set(segKey(track, index), {
+    file,
+    track,
+    index,
+    startMs: startMs - rec.startedAt,
+    stream: fs.createWriteStream(file),
+  });
+});
+
+ipcMain.on('rec:seg-chunk', (e, track, index, data) => {
+  if (!rec) return;
+  const seg = rec.segs.get(segKey(track, index));
+  if (seg) seg.stream.write(Buffer.from(data));
+});
+
+ipcMain.on('rec:seg-done', (e, track, index) => {
+  if (!rec) return;
+  const seg = rec.segs.get(segKey(track, index));
+  if (!seg) return;
+  const job = rec; // bind to this recording
+  const closed = new Promise((res) => seg.stream.end(res));
+  job.liveQueue = job.liveQueue.then(async () => {
+    await closed;
+    try {
+      await transcribeSegment(job, seg);
+    } catch (err) {
+      console.error(`segment ${seg.track}:${seg.index} failed:`, err.message || err);
+    }
+  });
+});
+
+async function transcribeSegment(job, seg) {
+  const wav = `${seg.file}.wav`;
+  try {
+    await toWav(seg.file, wav);
+    const parts = await transcribeSegments(wav, job.lang, BASE_DIR, {
+      modelName: cfg().meetingModel || undefined,
+      vad: true,
+      beam: 1,
+      prompt: config.vocabPrompt() || undefined,
+      threads: state === 'recording' ? 4 : undefined, // leave CPU for the ongoing call
+    });
+    for (const p of parts) {
+      job.results.push({ track: seg.track, fromMs: seg.startMs + p.fromMs, toMs: seg.startMs + p.toMs, text: p.text });
+    }
+    pushLive(job);
+  } finally {
+    fs.rmSync(wav, { force: true });
+  }
+}
+
+function pushLive(job) {
+  if (rec !== job || state !== 'recording') return;
+  const labels = speakerLabels(job.lang, cfg().yourName);
+  const turns = buildTurns(filterEcho(job.results)).slice(-40).map((t) => ({
+    label: labels[t.track],
+    time: fmtMs(t.fromMs),
+    text: t.text,
+    track: t.track,
+  }));
+  uiSend('ui:live', turns);
+}
+
 ipcMain.on('rec:error', (e, msg) => failRecording(msg));
 ipcMain.on('rec:log', (e, msg) => console.log('[recorder]', msg));
 ipcMain.on('rec:done', async () => {
   if (!rec) return;
   const job = rec;
   rec = null;
-  await new Promise((res) => job.stream.end(res));
-  console.log('Recording saved:', job.webmPath);
   try {
     await processRecording(job);
   } catch (err) {
@@ -163,26 +272,62 @@ ipcMain.on('rec:done', async () => {
   if (QUIT_AFTER_NOTES) { console.log('[selftest] DONE'); setTimeout(() => app.quit(), 500); }
 });
 
-async function processRecording(job) {
-  const base = path.join(NOTES_DIR, job.stamp);
-  const mdPath = `${base}.md`;
-  const wavPath = `${base}.tmp.wav`;
-  let transcript;
-  try {
-    console.log('Converting to 16 kHz wav…');
-    uiSend('ui:progress', 'Converting audio…');
-    await toWav(job.webmPath, wavPath);
-    console.log('Transcribing with whisper.cpp…');
-    uiSend('ui:progress', 'Transcribing…');
-    transcript = await transcribe(wavPath, job.lang, BASE_DIR, { vad: true, beam: 1 });
-  } finally {
-    fs.rmSync(wavPath, { force: true });
+async function mixAudio(job) {
+  const finalPath = path.join(NOTES_DIR, `${job.stamp}.webm`);
+  const byTrack = {};
+  for (const seg of job.segs.values()) {
+    if (!fs.existsSync(seg.file) || fs.statSync(seg.file).size === 0) continue;
+    (byTrack[seg.track] = byTrack[seg.track] || []).push(seg);
   }
+  const trackFiles = [];
+  const temp = [];
+  for (const track of ['mic', 'sys']) {
+    const segs = (byTrack[track] || []).sort((a, b) => a.index - b.index);
+    if (segs.length === 0) continue;
+    if (segs.length === 1) {
+      trackFiles.push(segs[0].file);
+    } else {
+      const list = path.join(NOTES_DIR, `${job.stamp}.${track}.txt`);
+      fs.writeFileSync(list, segs.map((s) => `file '${s.file.replace(/\\/g, '/')}'`).join('\n'));
+      const out = path.join(NOTES_DIR, `${job.stamp}.${track}.webm`);
+      await runCmd(ffmpegPath(), ['-y', '-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', out]);
+      temp.push(list, out);
+      trackFiles.push(out);
+    }
+  }
+  if (trackFiles.length === 0) throw new Error('no audio was recorded');
+  if (trackFiles.length === 1) {
+    fs.copyFileSync(trackFiles[0], finalPath);
+  } else {
+    await runCmd(ffmpegPath(), [
+      '-y', '-i', trackFiles[0], '-i', trackFiles[1],
+      '-filter_complex', '[0:a][1:a]amix=inputs=2:duration=longest:dropout_transition=0[a]',
+      '-map', '[a]', '-c:a', 'libopus', '-b:a', '64000', finalPath,
+    ]);
+  }
+  // raw segments are no longer needed once the mixed file exists
+  for (const seg of job.segs.values()) fs.rmSync(seg.file, { force: true });
+  for (const f of temp) fs.rmSync(f, { force: true });
+  return finalPath;
+}
+
+async function processRecording(job) {
+  const mdPath = path.join(NOTES_DIR, `${job.stamp}.md`);
+  console.log('Waiting for live transcription to finish…');
+  await job.liveQueue;
+  console.log('Mixing audio…');
+  uiSend('ui:progress', 'Mixing audio…');
+  await mixAudio(job);
+  const turns = buildTurns(filterEcho(job.results));
+  const transcript = turnsToMarkdown(turns, job.lang, cfg().yourName);
   console.log('Summarizing…');
   uiSend('ui:progress', 'Summarizing…');
   let summary = null;
   try {
-    summary = await summarize(transcript, job.lang);
+    summary = await summarize(transcript, job.lang, {
+      context: job.context,
+      onProgress: (t) => uiSend('ui:progress', t),
+    });
   } catch (err) {
     console.error('Summary failed (keeping transcript):', err.message || err);
   }
@@ -206,7 +351,7 @@ function createMainWindow() {
     show: false,
     title: 'Turtle Talks',
     icon: path.join(__dirname, 'build', 'icon.ico'),
-    backgroundColor: '#f7f1e1',
+    backgroundColor: '#f3efe6',
     webPreferences: { preload: path.join(__dirname, 'preload.js') },
   });
   mainWin.removeMenu();
@@ -223,12 +368,46 @@ function showMainWindow() {
   mainWin.focus();
 }
 
+function listWhisperModels() {
+  const dirs = [path.join(BASE_DIR, 'whisper'), path.join(NOTES_DIR, 'whisper')];
+  const models = new Set();
+  for (const dir of dirs) {
+    if (!fs.existsSync(dir)) continue;
+    for (const f of fs.readdirSync(dir)) {
+      if (/^ggml-.*\.bin$/i.test(f) && !/silero/i.test(f)) models.add(f);
+    }
+  }
+  return [...models].sort();
+}
+
 ipcMain.handle('ui:get-state', () => ({
   state,
   recLang: rec ? rec.lang : null,
-  hotkey: DICT_HOTKEY.replace(/Control/g, 'Ctrl'),
+  hotkey: hotkeyLabel(),
   dictHistory,
 }));
+
+ipcMain.handle('ui:get-settings', () => ({
+  settings: config.get(),
+  models: listWhisperModels(),
+}));
+
+ipcMain.handle('ui:save-settings', (e, patch) => {
+  const before = config.get();
+  const next = config.set(patch);
+  if (next.dictHotkey !== before.dictHotkey) {
+    globalShortcut.unregister(before.dictHotkey);
+    const ok = globalShortcut.register(next.dictHotkey, toggleDictation);
+    if (!ok) {
+      config.set({ dictHotkey: before.dictHotkey });
+      globalShortcut.register(before.dictHotkey, toggleDictation);
+      return { ok: false, error: `Hotkey ${next.dictHotkey} could not be registered (taken by another app?)` };
+    }
+  }
+  updateTray();
+  uiSend('ui:state', { state, recLang: rec ? rec.lang : null });
+  return { ok: true, settings: config.get() };
+});
 
 ipcMain.handle('ui:list-notes', () => {
   fs.mkdirSync(NOTES_DIR, { recursive: true });
@@ -243,11 +422,16 @@ ipcMain.handle('ui:list-notes', () => {
         if (head.includes('Nederlands')) lang = 'NL';
         else if (head.includes('English')) lang = 'EN';
         const m = head.match(/^# (.+)$/m);
-        if (m) title = m[1].replace(/^Meeting notes — .*$/, '').trim() || m[1].trim();
+        if (m) title = m[1].trim();
       } catch {}
       return { file: f, mtime: st.mtimeMs, lang, title: title || f.replace(/\.md$/, '') };
     })
     .sort((a, b) => b.mtime - a.mtime);
+});
+
+ipcMain.handle('ui:read-note', (e, file) => {
+  const p = path.join(NOTES_DIR, path.basename(String(file)));
+  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
 });
 
 ipcMain.handle('ui:save-note', (e, payload) => {
@@ -255,11 +439,6 @@ ipcMain.handle('ui:save-note', (e, payload) => {
   if (!file.endsWith('.md')) return false;
   fs.writeFileSync(path.join(NOTES_DIR, file), String(payload.content), 'utf8');
   return true;
-});
-
-ipcMain.handle('ui:read-note', (e, file) => {
-  const p = path.join(NOTES_DIR, path.basename(String(file)));
-  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
 });
 
 ipcMain.on('ui:start', (e, lang) => startRecording(lang === 'nl' ? 'nl' : 'en'));
@@ -320,7 +499,7 @@ function toggleDictation() {
 function startDictation() {
   dict = { webmPath: path.join(os.tmpdir(), `dictate-${Date.now()}.webm`) };
   dict.stream = fs.createWriteStream(dict.webmPath);
-  overlayShow('listening', DICT_HOTKEY.replace(/Control/g, 'Ctrl'));
+  overlayShow('listening', hotkeyLabel());
   win.webContents.executeJavaScript('window.__dictStart()', true).catch((e) => {
     console.error('dictation start failed:', e);
     cancelDictation();
@@ -344,16 +523,6 @@ public class U {
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
 }`;
-
-function runPs(command) {
-  return new Promise((resolve) => {
-    const ps = spawn('powershell.exe', ['-NoProfile', '-Command', command], { windowsHide: true });
-    let out = '';
-    ps.stdout.on('data', (d) => { out += d; });
-    ps.on('close', () => resolve(out.trim()));
-    ps.on('error', () => resolve(''));
-  });
-}
 
 // remember which window the user was dictating into, so a slow transcription
 // can't paste into whatever happens to be focused later
@@ -434,7 +603,12 @@ ipcMain.on('dict:done', async () => {
     await new Promise((res) => job.stream.end(res));
     overlayShow('transcribing');
     await toWav(job.webmPath, wavPath);
-    const raw = await transcribe(wavPath, DICT_LANG, BASE_DIR, { modelName: DICT_MODEL, suppressNonSpeech: true, beam: 1 });
+    const raw = await transcribe(wavPath, cfg().dictLang, BASE_DIR, {
+      modelName: cfg().dictModel,
+      suppressNonSpeech: true,
+      beam: 1,
+      prompt: config.vocabPrompt() || undefined,
+    });
     const text = cleanDictation(raw);
     if (!text) {
       overlayShow('empty');
@@ -562,32 +736,17 @@ if (!app.requestSingleInstanceLock()) {
           console.log('[shot]', name);
         };
         await snap('tt-window.png');
-        // exercise the editor + save round-trip on a scratch note
-        const testFile = 'zz-uitest.md';
-        fs.writeFileSync(path.join(NOTES_DIR, testFile), '# Original title\n\nBody line one.\n', 'utf8');
-        await wc.executeJavaScript(`refreshNotes(${JSON.stringify(testFile)})`);
+        await wc.executeJavaScript(`openSettings()`);
         await new Promise((r) => setTimeout(r, 400));
-        await wc.executeJavaScript(`document.getElementById('b-edit').click()`);
-        await new Promise((r) => setTimeout(r, 300));
-        await snap('tt-editor.png');
-        await wc.executeJavaScript(`document.getElementById('ed-title').value = 'Edited by uitest'; document.getElementById('b-save').click()`);
-        await new Promise((r) => setTimeout(r, 500));
-        const saved = fs.readFileSync(path.join(NOTES_DIR, testFile), 'utf8').split('\n')[0];
-        console.log('[shot] saved H1:', saved);
-        fs.rmSync(path.join(NOTES_DIR, testFile), { force: true });
-        await wc.executeJavaScript(`selected = null; refreshNotes()`);
-        await new Promise((r) => setTimeout(r, 300));
-        await wc.executeJavaScript(`openDicts()`);
-        await new Promise((r) => setTimeout(r, 300));
-        await snap('tt-dicts.png');
+        await snap('tt-settings.png');
         app.quit();
       }, 3500);
     }
 
-    const ok = globalShortcut.register(DICT_HOTKEY, toggleDictation);
+    const ok = globalShortcut.register(cfg().dictHotkey, toggleDictation);
     if (!ok) {
-      console.error(`could not register dictation hotkey ${DICT_HOTKEY} (already in use?)`);
-      notify('Turtle Talks', `Dictation hotkey ${DICT_HOTKEY} is taken by another app — set DICTATE_HOTKEY in .env`);
+      console.error(`could not register dictation hotkey ${cfg().dictHotkey} (already in use?)`);
+      notify('Turtle Talks', `Dictation hotkey ${hotkeyLabel()} is taken by another app — change it in Settings`);
     }
 
     if (!SELFTEST && !DICTTEST) watcher.start();
@@ -603,7 +762,7 @@ if (!app.requestSingleInstanceLock()) {
     if (DICTTEST) {
       const secs = Number(process.env.SELFTEST_SECONDS || 8);
       win.webContents.once('did-finish-load', () => {
-        console.log(`[dicttest] dictating ${secs}s (lang=${DICT_LANG}, model=${DICT_MODEL})…`);
+        console.log(`[dicttest] dictating ${secs}s (lang=${cfg().dictLang}, model=${cfg().dictModel})…`);
         toggleDictation();
         setTimeout(() => toggleDictation(), secs * 1000);
       });

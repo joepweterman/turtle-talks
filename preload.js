@@ -1,7 +1,9 @@
 const { contextBridge, ipcRenderer, clipboard } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
-  chunk: (buf) => ipcRenderer.send('rec:chunk', new Uint8Array(buf)),
+  segStart: (track, index, startMs) => ipcRenderer.send('rec:seg-start', track, index, startMs),
+  segChunk: (track, index, buf) => ipcRenderer.send('rec:seg-chunk', track, index, new Uint8Array(buf)),
+  segDone: (track, index) => ipcRenderer.send('rec:seg-done', track, index),
   done: () => ipcRenderer.send('rec:done'),
   error: (msg) => ipcRenderer.send('rec:error', String(msg)),
   log: (msg) => ipcRenderer.send('rec:log', String(msg)),
@@ -23,5 +25,8 @@ contextBridge.exposeInMainWorld('api', {
   onNotesChanged: (cb) => ipcRenderer.on('ui:notes-changed', (e, f) => cb(f)),
   onSelectNote: (cb) => ipcRenderer.on('ui:select-note', (e, f) => cb(f)),
   onDict: (cb) => ipcRenderer.on('ui:dict', (e, h) => cb(h)),
+  onLive: (cb) => ipcRenderer.on('ui:live', (e, turns) => cb(turns)),
   copyText: (t) => clipboard.writeText(String(t)),
+  getSettings: () => ipcRenderer.invoke('ui:get-settings'),
+  saveSettings: (patch) => ipcRenderer.invoke('ui:save-settings', patch),
 });
