@@ -1,9 +1,11 @@
-# Downloads the whisper.cpp Windows binary and a ggml model into ./whisper
-# Usage: npm run setup            (BLAS-accelerated build + medium model)
-#        powershell -ExecutionPolicy Bypass -File scripts/setup-whisper.ps1 -Model small
+# Downloads the whisper.cpp Windows binary and ggml models into ./whisper
+# (or any -Dest, e.g. -Dest $env:USERPROFILE\MeetingNotes\whisper for an
+# installed Turtle Talks). Medium is used for meetings, small for dictation.
+# Usage: npm run setup
+#        powershell -ExecutionPolicy Bypass -File scripts/setup-whisper.ps1 -Dest "$env:USERPROFILE\MeetingNotes\whisper"
 param(
     [string]$Dest = (Join-Path (Split-Path $PSScriptRoot -Parent) 'whisper'),
-    [string]$Model = 'medium'
+    [string[]]$Models = @('medium', 'small')
 )
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Force $Dest | Out-Null
@@ -27,15 +29,17 @@ if ($exe) {
     if ($exe) { Write-Host "whisper binary ready: $($exe.FullName)" } else { Write-Warning "No whisper-cli.exe found after extraction" }
 }
 
-$modelFile = Join-Path $Dest "ggml-$Model.bin"
-if (Test-Path $modelFile) {
-    Write-Host "Model already present: $modelFile"
-} else {
-    Write-Host "Downloading ggml-$Model.bin (medium is ~1.5 GB, this can take a while)..."
+foreach ($Model in $Models) {
+    $modelFile = Join-Path $Dest "ggml-$Model.bin"
+    if (Test-Path $modelFile) {
+        Write-Host "Model already present: $modelFile"
+        continue
+    }
+    Write-Host "Downloading ggml-$Model.bin (medium is ~1.5 GB, small ~470 MB)..."
     # -C - resumes a partial download; retries cover flaky connections
     curl.exe -L --fail -sS -C - --retry 8 --retry-delay 3 --retry-all-errors `
         -o "$modelFile.part" "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-$Model.bin"
-    if ($LASTEXITCODE -ne 0) { throw "Model download failed (curl exit $LASTEXITCODE). Re-run npm run setup to resume." }
+    if ($LASTEXITCODE -ne 0) { throw "Model download failed (curl exit $LASTEXITCODE). Re-run to resume." }
     Move-Item "$modelFile.part" $modelFile
     Write-Host "Model ready: $modelFile"
 }

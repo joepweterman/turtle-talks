@@ -71,26 +71,36 @@ DICTATE_LANG=auto                  # or force nl / en
 
 ## Install
 
-### As a desktop app (recommended)
+### From a release (easiest)
 
-```powershell
-git clone <this repo> meeting-notes
-cd meeting-notes
-npm install
-npm run setup     # downloads whisper.cpp + the medium model (~1.5 GB, resumable)
-npm run dist      # builds the installer into dist\
-```
+1. Download **Turtle Talks Setup x.x.x.exe** from the
+   [latest release](https://github.com/joepweterman/turtle-talks/releases/latest)
+   and run it (per-user install, no admin needed).
+2. Download the speech models (~2 GB, one time, resumable) by pasting this in
+   PowerShell:
 
-Run the installer from `dist\` — it adds **Turtle Talks** to the Start menu and
-desktop. The installed app looks for `whisper\` and `.env` in
-`C:\Users\<you>\MeetingNotes\` (move them there after `npm run setup`; running
-from source finds them in either place).
+   ```powershell
+   powershell -ExecutionPolicy Bypass -Command "iwr -useb https://raw.githubusercontent.com/joepweterman/turtle-talks/main/scripts/setup-whisper.ps1 -OutFile $env:TEMP\tt-setup.ps1; & $env:TEMP\tt-setup.ps1 -Dest $env:USERPROFILE\MeetingNotes\whisper"
+   ```
+
+3. Grant the microphone permission (below) and optionally set up a summarizer.
+   Without one you still get full transcripts, just no AI summary.
 
 ### From source
 
-Requirements: Node.js 18+ (tested on 24) and ~2 GB of disk for the model.
-Same steps as above, then `npm start` (or a shortcut to `start.cmd` in
-`shell:startup` to autostart).
+Requirements: Node.js 18+ (tested on 24) and ~2.5 GB of disk for the models.
+
+```powershell
+git clone https://github.com/joepweterman/turtle-talks.git
+cd turtle-talks
+npm install
+npm run setup     # whisper.cpp + medium & small models (resumable)
+npm start         # or: npm run dist  → installer in dist\
+```
+
+The installed app looks for `whisper\` and `.env` in
+`C:\Users\<you>\MeetingNotes\`; running from source finds them in the project
+folder or there.
 
 ### Permissions you need to grant
 

@@ -20,6 +20,14 @@ const DICTTEST = process.argv.includes('--dicttest');
 const NUDGETEST = process.argv.includes('--nudgetest');
 const QUIT_AFTER_NOTES = SELFTEST || NUDGETEST;
 
+// When installed, never write to a console: if the app inherits a terminal
+// (e.g. launched from a shell), log lines would appear inside that terminal.
+if (app.isPackaged && !SELFTEST && !DICTTEST && !NUDGETEST) {
+  console.log = () => {};
+  console.warn = () => {};
+  console.error = () => {};
+}
+
 const DICT_HOTKEY = process.env.DICTATE_HOTKEY || 'Control+Alt+T';
 const DICT_LANG = process.env.DICTATE_LANG || 'auto'; // auto-detect NL vs EN per utterance
 const DICT_MODEL = process.env.DICTATE_MODEL || 'ggml-small.bin';
