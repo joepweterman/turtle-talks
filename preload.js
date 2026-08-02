@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, clipboard } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
   chunk: (buf) => ipcRenderer.send('rec:chunk', new Uint8Array(buf)),
@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('api', {
   getState: () => ipcRenderer.invoke('ui:get-state'),
   listNotes: () => ipcRenderer.invoke('ui:list-notes'),
   readNote: (file) => ipcRenderer.invoke('ui:read-note', file),
+  saveNote: (file, content) => ipcRenderer.invoke('ui:save-note', { file, content }),
   start: (lang) => ipcRenderer.send('ui:start', lang),
   stop: () => ipcRenderer.send('ui:stop'),
   openFolder: () => ipcRenderer.send('ui:open-folder'),
@@ -22,4 +23,5 @@ contextBridge.exposeInMainWorld('api', {
   onNotesChanged: (cb) => ipcRenderer.on('ui:notes-changed', (e, f) => cb(f)),
   onSelectNote: (cb) => ipcRenderer.on('ui:select-note', (e, f) => cb(f)),
   onDict: (cb) => ipcRenderer.on('ui:dict', (e, h) => cb(h)),
+  copyText: (t) => clipboard.writeText(String(t)),
 });

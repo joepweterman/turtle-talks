@@ -8,14 +8,18 @@ const SRC = path.join(__dirname, '..', 'assets', 'icon-source.png');
 const OUT_DIR = path.join(__dirname, '..', 'build');
 
 function roundedMask(size) {
-  const r = Math.round(size * 0.24); // slightly larger than the artwork's own radius so no white survives
+  const r = Math.round(size * 0.23);
   return Buffer.from(
     `<svg width="${size}" height="${size}"><rect x="0" y="0" width="${size}" height="${size}" rx="${r}" ry="${r}" fill="#fff"/></svg>`,
   );
 }
 
 async function render(size) {
+  // crop ~2.5% off each edge first — the artwork has a thin white margin
+  const meta = await sharp(SRC).metadata();
+  const inset = Math.round(meta.width * 0.025);
   return sharp(SRC)
+    .extract({ left: inset, top: inset, width: meta.width - 2 * inset, height: meta.height - 2 * inset })
     .resize(size, size, { fit: 'cover' })
     .composite([{ input: roundedMask(size), blend: 'dest-in' }])
     .png()
@@ -47,6 +51,8 @@ async function main() {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   fs.writeFileSync(path.join(OUT_DIR, 'icon.ico'), Buffer.concat([header, ...entries, ...pngs]));
   fs.writeFileSync(path.join(OUT_DIR, 'icon.png'), pngs[sizes.length - 1]);
+  // clean rounded version for use inside the app's own UI
+  fs.writeFileSync(path.join(__dirname, '..', 'assets', 'icon.png'), pngs[sizes.length - 1]);
   console.log('wrote build/icon.ico');
 }
 

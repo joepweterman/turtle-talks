@@ -3,148 +3,205 @@
 <head>
 <meta charset="utf-8">
 <title>Turtle Talks</title>
+<link rel="stylesheet" href="fonts.css">
 <style>
   :root {
     --green: #16352a;
-    --green-2: #1e4636;
+    --green-2: #1d4234;
+    --green-3: #0f281f;
     --shell: #8fa86b;
     --cream: #f5ecd3;
-    --paper: #faf6ea;
-    --ink: #22302a;
+    --paper: #f3efe6;
+    --card: #faf7ef;
+    --ink: #1f2b25;
+    --muted: #66735f;
+    --line: rgba(31, 43, 37, .12);
     --red: #d64545;
     --amber: #d9930b;
+    --ease: cubic-bezier(.25, .6, .3, 1);
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; font-family: "Segoe UI", sans-serif; }
+  html, body { margin: 0; height: 100%; font-family: 'Hanken Grotesk', 'Segoe UI', sans-serif; }
+  ::-webkit-scrollbar { width: 9px; }
+  ::-webkit-scrollbar-thumb { background: rgba(120, 130, 110, .35); border-radius: 5px; border: 2px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-track { background: transparent; }
   #root { display: flex; height: 100%; }
 
   /* ---------- sidebar ---------- */
   #side {
-    width: 300px;
-    min-width: 300px;
-    background: var(--green);
+    width: 308px; min-width: 308px;
+    background: linear-gradient(180deg, var(--green) 0%, var(--green-3) 100%);
     color: var(--cream);
-    display: flex;
-    flex-direction: column;
+    display: flex; flex-direction: column;
   }
-  #brand { display: flex; align-items: center; gap: 12px; padding: 18px 18px 12px; }
-  #brand img { width: 42px; height: 42px; border-radius: 10px; }
-  #brand .name { font-family: Georgia, serif; font-size: 20px; letter-spacing: .2px; }
-  #brand .tag { font-size: 11px; opacity: .6; }
+  #side ::-webkit-scrollbar-thumb { background: rgba(245, 236, 211, .22); border: 2px solid transparent; background-clip: content-box; }
+  #brand { display: flex; align-items: center; gap: 12px; padding: 20px 20px 14px; }
+  #brand .mark { width: 44px; height: 44px; border-radius: 11px; }
+  #brand .wordmark { height: 21px; display: block; }
+  #brand .tag { font-size: 11.5px; opacity: .58; margin-top: 5px; }
 
-  #controls { padding: 6px 18px 14px; border-bottom: 1px solid rgba(245,236,211,.12); }
+  #controls { padding: 4px 20px 16px; border-bottom: 1px solid rgba(245, 236, 211, .1); }
   .btnrow { display: flex; gap: 8px; }
   .btn {
     flex: 1; text-align: center; cursor: pointer; user-select: none;
     background: var(--cream); color: var(--green);
-    border-radius: 9px; padding: 9px 0; font-size: 13px; font-weight: 600;
+    border-radius: 10px; padding: 10px 0; font-size: 13px; font-weight: 650;
+    transition: transform .16s var(--ease), background .16s var(--ease), box-shadow .16s var(--ease);
   }
-  .btn:hover { background: #fff8e6; }
+  .btn:hover { background: #fff9e9; transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0, 0, 0, .25); }
+  .btn:active { transform: translateY(0); }
+  .btn .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--red); margin-right: 7px; vertical-align: 1px; }
   .btn.stop { background: var(--red); color: #fff; }
-  .btn.stop:hover { background: #e35b5b; }
-  .btn[disabled] { opacity: .45; pointer-events: none; }
-  #status { display: flex; align-items: center; gap: 8px; font-size: 12.5px; margin-top: 11px; min-height: 18px; }
-  #stdot { width: 9px; height: 9px; border-radius: 50%; background: var(--cream); opacity: .7; }
-  #stdot.rec { background: var(--red); opacity: 1; animation: pulse 1.2s infinite; }
-  #stdot.busy { background: var(--amber); opacity: 1; animation: pulse 1.2s infinite; }
-  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+  .btn.stop:hover { background: #e05b5b; }
+  #status { display: flex; align-items: center; gap: 8px; margin-top: 12px; min-height: 17px; font-size: 12.5px; opacity: .85; }
+  #stdot { width: 8px; height: 8px; border-radius: 50%; background: var(--cream); opacity: .55; flex: none; }
+  #stdot.rec { background: var(--red); opacity: 1; animation: pulse 1.3s infinite; }
+  #stdot.busy { background: var(--amber); opacity: 1; animation: pulse 1.3s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
 
-  #notes { flex: 1; overflow-y: auto; padding: 10px 10px; }
-  #notes h4 { margin: 4px 8px 8px; font-size: 11px; text-transform: uppercase; letter-spacing: .8px; opacity: .55; font-weight: 600; }
+  .sectionlabel { margin: 0 0 6px; font-size: 11px; font-weight: 700; opacity: .5; }
+  #notes { flex: 1; overflow-y: auto; padding: 14px 12px 8px; }
+  #notes .sectionlabel { margin-left: 8px; }
   .note {
-    padding: 9px 10px; border-radius: 9px; cursor: pointer; margin-bottom: 2px;
-    display: flex; align-items: baseline; gap: 8px; font-size: 13px;
+    padding: 9px 11px; border-radius: 10px; cursor: pointer; margin-bottom: 2px;
+    transition: background .16s var(--ease);
   }
-  .note:hover { background: rgba(245,236,211,.08); }
-  .note.sel { background: rgba(245,236,211,.16); }
-  .note .lang {
-    font-size: 10px; font-weight: 700; background: var(--shell); color: var(--green);
-    border-radius: 5px; padding: 1px 5px;
-  }
-  .note .when { opacity: .85; }
-  #empty-notes { opacity: .55; font-size: 12.5px; padding: 8px 10px; }
+  .note:hover { background: rgba(245, 236, 211, .07); }
+  .note.sel { background: rgba(245, 236, 211, .14); }
+  .note .t { font-size: 13.5px; font-weight: 550; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .note .m { font-family: 'JetBrains Mono', monospace; font-size: 10px; opacity: .5; margin-top: 3px; display: flex; gap: 8px; }
+  .note .m .lang { color: var(--shell); opacity: 1; font-weight: 700; }
+  #empty-notes { opacity: .5; font-size: 12.5px; padding: 6px 10px; }
 
-  #dictbox { border-top: 1px solid rgba(245,236,211,.12); padding: 12px 18px 14px; max-height: 220px; overflow-y: auto; }
-  #dictbox h4 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .8px; opacity: .55; font-weight: 600; }
-  #dictbox .hint { font-size: 12px; opacity: .75; margin-bottom: 6px; }
-  .dictitem { font-size: 12px; opacity: .9; padding: 5px 0; border-top: 1px dotted rgba(245,236,211,.15); }
-  .dictitem .meta { font-size: 10.5px; opacity: .55; }
+  #dictbox { border-top: 1px solid rgba(245, 236, 211, .1); padding: 14px 20px 16px; }
+  #dictbox .hint { font-size: 12px; opacity: .68; line-height: 1.45; margin-bottom: 8px; }
+  #dictbox .hint b { color: var(--shell); font-weight: 700; }
+  .dictpeek { font-size: 12px; opacity: .85; padding: 6px 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dictpeek span { font-family: 'JetBrains Mono', monospace; font-size: 9.5px; opacity: .5; margin-right: 7px; }
+  #dict-all {
+    display: inline-block; margin-top: 10px; cursor: pointer; font-size: 12px; font-weight: 650;
+    color: var(--shell); transition: opacity .16s var(--ease);
+  }
+  #dict-all:hover { opacity: .8; }
 
   /* ---------- content ---------- */
   #main { flex: 1; background: var(--paper); color: var(--ink); display: flex; flex-direction: column; min-width: 0; }
-  #topbar {
-    display: flex; align-items: center; gap: 10px;
-    padding: 12px 22px; border-bottom: 1px solid rgba(34,48,42,.1);
-  }
-  #note-title { font-family: Georgia, serif; font-size: 16px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #topbar { display: flex; align-items: center; gap: 8px; padding: 14px 26px; border-bottom: 1px solid var(--line); }
+  #view-title { font-family: 'Lora', serif; font-size: 16.5px; font-weight: 600; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .mini {
-    cursor: pointer; font-size: 12px; padding: 5px 11px; border-radius: 7px;
-    border: 1px solid rgba(34,48,42,.25); user-select: none; white-space: nowrap;
+    cursor: pointer; font-size: 12.5px; font-weight: 600; padding: 6px 13px; border-radius: 8px;
+    border: 1px solid var(--line); user-select: none; white-space: nowrap; background: transparent;
+    transition: background .16s var(--ease), border-color .16s var(--ease);
   }
-  .mini:hover { background: rgba(34,48,42,.06); }
-  #content { flex: 1; overflow-y: auto; padding: 26px 40px 40px; line-height: 1.55; }
-  #content h1 { font-family: Georgia, serif; font-size: 22px; margin: 0 0 14px; }
-  #content h2 { font-family: Georgia, serif; font-size: 17px; margin: 22px 0 8px; color: var(--green); }
-  #content ul { margin: 6px 0; padding-left: 22px; }
-  #content li { margin: 3px 0; }
-  #content hr { border: none; border-top: 1px solid rgba(34,48,42,.15); margin: 22px 0; }
-  #content p { margin: 8px 0; }
-  #content a { color: #1c5c46; }
-  #content .chk { font-family: monospace; }
-  #placeholder { text-align: center; margin-top: 110px; opacity: .55; }
-  #placeholder img { width: 84px; height: 84px; border-radius: 18px; opacity: .9; }
-  #placeholder p { font-size: 14px; }
+  .mini:hover { background: rgba(31, 43, 37, .05); border-color: rgba(31, 43, 37, .25); }
+  .mini.primary { background: var(--green); color: var(--cream); border-color: var(--green); }
+  .mini.primary:hover { background: var(--green-2); }
+
+  #content { flex: 1; overflow-y: auto; padding: 30px 46px 52px; line-height: 1.6; }
+  .fade { animation: fadein .22s var(--ease); }
+  @keyframes fadein { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  #content h1 { font-family: 'Lora', serif; font-size: 27px; font-weight: 600; margin: 0 0 6px; line-height: 1.25; }
+  #content h2 { font-family: 'Lora', serif; font-size: 17.5px; font-weight: 600; margin: 26px 0 8px; color: #235244; }
+  #content ul { margin: 6px 0; padding-left: 24px; }
+  #content li { margin: 4px 0; font-size: 14.5px; }
+  #content hr { border: none; border-top: 1px solid var(--line); margin: 26px 0; }
+  #content p { margin: 8px 0; font-size: 14.5px; }
+  #content p em, #content p i { font-family: 'Lora', serif; color: var(--muted); }
+  #content a { color: #1c5c46; text-decoration-color: rgba(28, 92, 70, .35); }
+  #content .chk { font-family: 'JetBrains Mono', monospace; }
+  #content .tr { font-family: 'JetBrains Mono', monospace; font-size: 12.5px; color: #46544c; line-height: 1.7; }
+  #placeholder { text-align: center; margin-top: 120px; opacity: .55; }
+  #placeholder img { width: 88px; height: 88px; border-radius: 20px; }
+  #placeholder p { font-size: 14px; line-height: 1.6; }
+
+  /* editor */
+  #editor { display: none; flex-direction: column; gap: 12px; height: 100%; }
+  #ed-title {
+    font-family: 'Lora', serif; font-size: 23px; font-weight: 600; color: var(--ink);
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; outline: none;
+  }
+  #ed-title:focus { border-color: #235244; }
+  #ed-body {
+    flex: 1; resize: none; outline: none;
+    font-family: 'JetBrains Mono', monospace; font-size: 12.8px; line-height: 1.65; color: var(--ink);
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px;
+  }
+  #ed-body:focus { border-color: #235244; }
+
+  /* dictation history view */
+  .day { font-family: 'Lora', serif; font-size: 15px; font-weight: 600; color: #235244; margin: 22px 0 6px; }
+  .drow {
+    display: flex; align-items: baseline; gap: 14px; padding: 10px 14px; margin: 4px 0;
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+  }
+  .drow .time { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: var(--muted); flex: none; }
+  .drow .text { flex: 1; font-size: 13.5px; }
+  .drow .copy {
+    flex: none; cursor: pointer; font-size: 11.5px; font-weight: 650; color: #1c5c46;
+    opacity: 0; transition: opacity .16s var(--ease);
+  }
+  .drow:hover .copy { opacity: 1; }
+  .drow .flag { flex: none; font-family: 'JetBrains Mono', monospace; font-size: 9.5px; color: var(--muted); }
 </style>
 </head>
 <body>
 <div id="root">
   <div id="side">
     <div id="brand">
-      <img src="../assets/icon-source.png" alt="">
+      <img class="mark" src="../assets/icon.png" alt="">
       <div>
-        <div class="name">Turtle Talks</div>
+        <img class="wordmark" src="../assets/wordmark.png" alt="turtle talks">
         <div class="tag">local meeting notes &amp; dictation</div>
       </div>
     </div>
     <div id="controls">
-      <div class="btnrow">
-        <div class="btn" id="b-en">● Record EN</div>
-        <div class="btn" id="b-nl">● Opname NL</div>
-        <div class="btn stop" id="b-stop" style="display:none">■ Stop &amp; make notes</div>
+      <div class="btnrow" id="row-start">
+        <div class="btn" id="b-en"><span class="dot"></span>Record English</div>
+        <div class="btn" id="b-nl"><span class="dot"></span>Opname NL</div>
+      </div>
+      <div class="btnrow" id="row-stop" style="display:none">
+        <div class="btn stop" id="b-stop">Stop en maak notities</div>
       </div>
       <div id="status"><span id="stdot"></span><span id="sttext">Idle</span></div>
     </div>
     <div id="notes">
-      <h4>Meeting notes</h4>
+      <div class="sectionlabel">Meeting notes</div>
       <div id="notelist"></div>
     </div>
     <div id="dictbox">
-      <h4>Dictation</h4>
-      <div class="hint">Press <b id="hotkey">Ctrl+Alt+T</b> in any app, speak (NL or EN), press again — text is typed at your cursor.</div>
-      <div id="dictlist"></div>
+      <div class="sectionlabel">Dictation</div>
+      <div class="hint">Press <b id="hotkey">Ctrl+Alt+T</b> in any app, speak Dutch or English, press again. The text lands at your cursor.</div>
+      <div id="dictpeek"></div>
+      <span id="dict-all">View all dictations</span>
     </div>
   </div>
   <div id="main">
     <div id="topbar">
-      <div id="note-title">No note selected</div>
-      <div class="mini" id="b-audio" style="display:none">▶ Audio</div>
-      <div class="mini" id="b-file" style="display:none">Open file</div>
-      <div class="mini" id="b-folder">Open folder</div>
+      <div id="view-title">Turtle Talks</div>
+      <button class="mini" id="b-edit" style="display:none">Edit</button>
+      <button class="mini" id="b-audio" style="display:none">Play audio</button>
+      <button class="mini" id="b-file" style="display:none">Open file</button>
+      <button class="mini" id="b-folder">Open folder</button>
+      <button class="mini primary" id="b-save" style="display:none">Save</button>
+      <button class="mini" id="b-cancel" style="display:none">Cancel</button>
     </div>
     <div id="content">
       <div id="placeholder">
-        <img src="../assets/icon-source.png" alt="">
-        <p>Record a meeting or pick a note on the left.<br>Notes live in your MeetingNotes folder — nothing leaves this machine.</p>
+        <img src="../assets/icon.png" alt="">
+        <p>Record a meeting or pick a note on the left.<br>Everything stays on this machine.</p>
       </div>
     </div>
   </div>
 </div>
 <script>
   const $ = (id) => document.getElementById(id);
-  let selected = null;
   let notes = [];
+  let selected = null;   // filename of open note
+  let mode = 'note';     // note | dicts | edit
+  let dictAll = [];
+  let currentMd = '';
 
-  function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
   function inline(t) {
     return esc(t)
@@ -156,31 +213,50 @@
   function mdToHtml(md) {
     const out = [];
     let inList = false;
+    let inTranscript = false;
     const closeList = () => { if (inList) { out.push('</ul>'); inList = false; } };
     for (const line of md.split(/\r?\n/)) {
-      if (/^## /.test(line)) { closeList(); out.push(`<h2>${inline(line.slice(3))}</h2>`); }
+      if (/^## /.test(line)) {
+        closeList();
+        inTranscript = /transcript/i.test(line);
+        out.push(`<h2>${inline(line.slice(3))}</h2>`);
+      }
       else if (/^# /.test(line)) { closeList(); out.push(`<h1>${inline(line.slice(2))}</h1>`); }
       else if (/^---+\s*$/.test(line)) { closeList(); out.push('<hr>'); }
       else if (/^[-*] \[[ xX]\] /.test(line)) {
         if (!inList) { out.push('<ul>'); inList = true; }
         const done = /^[-*] \[[xX]\]/.test(line);
-        out.push(`<li><span class="chk">${done ? '☑' : '☐'}</span> ${inline(line.replace(/^[-*] \[[ xX]\] /, ''))}</li>`);
+        out.push(`<li><span class="chk">${done ? '[x]' : '[ ]'}</span> ${inline(line.replace(/^[-*] \[[ xX]\] /, ''))}</li>`);
       }
       else if (/^[-*] /.test(line)) {
         if (!inList) { out.push('<ul>'); inList = true; }
         out.push(`<li>${inline(line.slice(2))}</li>`);
       }
       else if (line.trim() === '') { closeList(); }
-      else { closeList(); out.push(`<p>${inline(line)}</p>`); }
+      else { closeList(); out.push(`<p${inTranscript ? ' class="tr"' : ''}>${inline(line)}</p>`); }
     }
     closeList();
     return out.join('\n');
   }
 
-  function fmtWhen(file, mtime) {
+  const fmtStamp = (file, mtime) => {
     const m = file.match(/^(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})/);
-    if (m) return `${m[3]}-${m[2]}-${m[1]} · ${m[4]}:${m[5]}`;
-    return new Date(mtime).toLocaleString();
+    return m ? `${m[3]}-${m[2]}-${m[1]}  ${m[4]}:${m[5]}` : new Date(mtime).toLocaleString();
+  };
+
+  function splitNote(md) {
+    const m = md.match(/^# (.+)\r?\n?/);
+    if (m) return { title: m[1], body: md.slice(m[0].length).replace(/^\r?\n/, '') };
+    return { title: '', body: md };
+  }
+
+  function setButtons() {
+    $('b-edit').style.display = mode === 'note' && selected ? '' : 'none';
+    $('b-audio').style.display = mode === 'note' && selected && currentMd.includes('.webm') ? '' : 'none';
+    $('b-file').style.display = mode === 'note' && selected ? '' : 'none';
+    $('b-folder').style.display = mode === 'edit' ? 'none' : '';
+    $('b-save').style.display = mode === 'edit' ? '' : 'none';
+    $('b-cancel').style.display = mode === 'edit' ? '' : 'none';
   }
 
   async function refreshNotes(selectFile) {
@@ -188,56 +264,106 @@
     const list = $('notelist');
     list.innerHTML = '';
     if (notes.length === 0) {
-      list.innerHTML = '<div id="empty-notes">No notes yet — record your first meeting.</div>';
-      return;
+      list.innerHTML = '<div id="empty-notes">No notes yet. Record your first meeting.</div>';
     }
     for (const n of notes) {
       const el = document.createElement('div');
       el.className = 'note' + (n.file === selected ? ' sel' : '');
-      el.innerHTML = `<span class="when">${fmtWhen(n.file, n.mtime)}</span>` + (n.lang ? `<span class="lang">${n.lang}</span>` : '');
+      el.innerHTML = `<div class="t">${esc(n.title)}</div>` +
+        `<div class="m"><span>${fmtStamp(n.file, n.mtime)}</span>${n.lang ? `<span class="lang">${n.lang}</span>` : ''}</div>`;
       el.onclick = () => openNote(n.file);
       list.appendChild(el);
     }
     if (selectFile) openNote(selectFile);
-    else if (!selected && notes.length) openNote(notes[0].file);
+    else if (!selected && notes.length && mode === 'note') openNote(notes[0].file);
   }
 
   async function openNote(file) {
+    mode = 'note';
     selected = file;
-    const md = await window.api.readNote(file);
-    $('note-title').textContent = file.replace(/\.md$/, '');
-    $('content').innerHTML = mdToHtml(md);
-    $('b-file').style.display = '';
-    $('b-audio').style.display = md.includes('.webm') ? '' : 'none';
+    currentMd = await window.api.readNote(file);
+    const { title } = splitNote(currentMd);
+    $('view-title').textContent = title || file.replace(/\.md$/, '');
+    const c = $('content');
+    c.className = 'fade';
+    c.innerHTML = mdToHtml(currentMd);
+    void c.offsetWidth;
     for (const el of document.querySelectorAll('#notelist .note')) el.classList.remove('sel');
     const idx = notes.findIndex((n) => n.file === file);
     if (idx >= 0) document.querySelectorAll('#notelist .note')[idx].classList.add('sel');
     for (const a of document.querySelectorAll('#content a[data-rel]')) {
       a.onclick = (e) => { e.preventDefault(); window.api.openRel(a.dataset.rel); };
     }
+    setButtons();
+  }
+
+  function openEditor() {
+    if (!selected) return;
+    mode = 'edit';
+    const { title, body } = splitNote(currentMd);
+    $('view-title').textContent = 'Editing';
+    $('content').innerHTML = `<div id="editor" style="display:flex">
+      <input id="ed-title" value="${esc(title)}" spellcheck="false">
+      <textarea id="ed-body" spellcheck="false"></textarea>
+    </div>`;
+    document.getElementById('ed-body').value = body;
+    setButtons();
+  }
+
+  async function saveEditor() {
+    const title = document.getElementById('ed-title').value.trim() || selected.replace(/\.md$/, '');
+    const body = document.getElementById('ed-body').value;
+    await window.api.saveNote(selected, `# ${title}\n\n${body.replace(/^\n+/, '')}`);
+    await refreshNotes(selected);
+  }
+
+  function openDicts() {
+    mode = 'dicts';
+    $('view-title').textContent = 'Dictation history';
+    const c = $('content');
+    c.className = 'fade';
+    if (dictAll.length === 0) {
+      c.innerHTML = '<div id="placeholder"><p>Nothing dictated yet.<br>Press the hotkey in any app and start talking.</p></div>';
+      setButtons();
+      return;
+    }
+    let html = '';
+    let lastDay = '';
+    for (const d of dictAll) {
+      const dt = new Date(d.ts);
+      const day = dt.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' });
+      if (day !== lastDay) { html += `<div class="day">${day}</div>`; lastDay = day; }
+      const time = dt.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+      html += `<div class="drow"><span class="time">${time}</span><span class="text">${esc(d.text)}</span>` +
+        `<span class="flag">${d.pasted ? 'pasted' : 'clipboard'}</span><span class="copy" data-t="${esc(d.text)}">Copy</span></div>`;
+    }
+    c.innerHTML = html;
+    for (const el of document.querySelectorAll('.copy')) {
+      el.onclick = () => { window.api.copyText(el.dataset.t); el.textContent = 'Copied'; setTimeout(() => { el.textContent = 'Copy'; }, 1200); };
+    }
+    setButtons();
+  }
+
+  function renderDictPeek() {
+    const box = $('dictpeek');
+    box.innerHTML = '';
+    for (const d of dictAll.slice(0, 3)) {
+      const el = document.createElement('div');
+      el.className = 'dictpeek';
+      const t = new Date(d.ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+      el.innerHTML = `<span>${t}</span>${esc(d.text)}`;
+      box.appendChild(el);
+    }
+    if (mode === 'dicts') openDicts();
   }
 
   function renderState(s) {
-    const idle = s.state === 'idle';
-    $('b-en').style.display = idle ? '' : 'none';
-    $('b-nl').style.display = idle ? '' : 'none';
-    $('b-stop').style.display = s.state === 'recording' ? '' : 'none';
+    $('row-start').style.display = s.state === 'idle' ? '' : 'none';
+    $('row-stop').style.display = s.state === 'recording' ? '' : 'none';
     $('stdot').className = s.state === 'recording' ? 'rec' : (s.state === 'processing' ? 'busy' : '');
     $('sttext').textContent = s.state === 'recording'
-      ? (s.recLang === 'nl' ? 'Aan het opnemen (NL)…' : 'Recording (EN)…')
-      : (s.state === 'processing' ? 'Making notes…' : 'Idle');
-  }
-
-  function renderDict(history) {
-    const box = $('dictlist');
-    box.innerHTML = '';
-    for (const d of history) {
-      const el = document.createElement('div');
-      el.className = 'dictitem';
-      const when = new Date(d.ts).toLocaleTimeString().slice(0, 5);
-      el.innerHTML = `<div>${esc(d.text)}</div><div class="meta">${when} · ${d.pasted ? 'pasted' : 'clipboard only'}</div>`;
-      box.appendChild(el);
-    }
+      ? (s.recLang === 'nl' ? 'Aan het opnemen (NL)' : 'Recording (EN)')
+      : (s.state === 'processing' ? 'Making notes' : 'Idle');
   }
 
   $('b-en').onclick = () => window.api.start('en');
@@ -246,18 +372,23 @@
   $('b-folder').onclick = () => window.api.openFolder();
   $('b-file').onclick = () => selected && window.api.openRel(selected);
   $('b-audio').onclick = () => selected && window.api.openRel(selected.replace(/\.md$/, '.webm'));
+  $('b-edit').onclick = openEditor;
+  $('b-save').onclick = saveEditor;
+  $('b-cancel').onclick = () => openNote(selected);
+  $('dict-all').onclick = openDicts;
 
   window.api.onState(renderState);
   window.api.onProgress((t) => { if (t) $('sttext').textContent = t; });
-  window.api.onNotesChanged((f) => refreshNotes(f));
+  window.api.onNotesChanged((f) => { if (mode !== 'edit') refreshNotes(f); else refreshNotes(); });
   window.api.onSelectNote((f) => openNote(f));
-  window.api.onDict(renderDict);
+  window.api.onDict((h) => { dictAll = h; renderDictPeek(); });
 
   (async () => {
     const s = await window.api.getState();
     $('hotkey').textContent = s.hotkey;
     renderState(s);
-    renderDict(s.dictHistory || []);
+    dictAll = s.dictHistory || [];
+    renderDictPeek();
     await refreshNotes();
   })();
 </script>

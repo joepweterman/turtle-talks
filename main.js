@@ -229,14 +229,24 @@ ipcMain.handle('ui:list-notes', () => {
     .map((f) => {
       const st = fs.statSync(path.join(NOTES_DIR, f));
       let lang = '';
+      let title = '';
       try {
-        const head = fs.readFileSync(path.join(NOTES_DIR, f), 'utf8').slice(0, 200);
-        if (head.includes('(Nederlands)')) lang = 'NL';
-        else if (head.includes('(English)')) lang = 'EN';
+        const head = fs.readFileSync(path.join(NOTES_DIR, f), 'utf8').slice(0, 400);
+        if (head.includes('Nederlands')) lang = 'NL';
+        else if (head.includes('English')) lang = 'EN';
+        const m = head.match(/^# (.+)$/m);
+        if (m) title = m[1].replace(/^Meeting notes — .*$/, '').trim() || m[1].trim();
       } catch {}
-      return { file: f, mtime: st.mtimeMs, lang };
+      return { file: f, mtime: st.mtimeMs, lang, title: title || f.replace(/\.md$/, '') };
     })
     .sort((a, b) => b.mtime - a.mtime);
+});
+
+ipcMain.handle('ui:save-note', (e, payload) => {
+  const file = path.basename(String(payload.file));
+  if (!file.endsWith('.md')) return false;
+  fs.writeFileSync(path.join(NOTES_DIR, file), String(payload.content), 'utf8');
+  return true;
 });
 
 ipcMain.handle('ui:read-note', (e, file) => {
@@ -375,10 +385,25 @@ function cleanDictation(raw) {
   return text;
 }
 
-const dictHistory = []; // last dictations, newest first: {ts, text, pasted}
+// dictation history: kept in memory (newest first) and persisted as JSONL
+const DICT_LOG = path.join(NOTES_DIR, 'dictations.jsonl');
+const dictHistory = []; // {ts, text, pasted}
+try {
+  if (fs.existsSync(DICT_LOG)) {
+    const lines = fs.readFileSync(DICT_LOG, 'utf8').trim().split('\n').slice(-300);
+    for (const line of lines.reverse()) {
+      try { dictHistory.push(JSON.parse(line)); } catch {}
+    }
+  }
+} catch (err) { console.error('could not load dictation history:', err); }
+
 function pushDictHistory(entry) {
   dictHistory.unshift(entry);
-  if (dictHistory.length > 8) dictHistory.pop();
+  if (dictHistory.length > 300) dictHistory.pop();
+  try {
+    fs.mkdirSync(NOTES_DIR, { recursive: true });
+    fs.appendFileSync(DICT_LOG, JSON.stringify(entry) + '\n');
+  } catch (err) { console.error('could not save dictation history:', err); }
   uiSend('ui:dict', dictHistory);
 }
 
@@ -523,9 +548,30 @@ if (!app.requestSingleInstanceLock()) {
     if (!TESTMODE) showMainWindow();
     if (process.argv.includes('--shot')) {
       setTimeout(async () => {
-        const img = await mainWin.webContents.capturePage();
-        fs.writeFileSync(path.join(os.tmpdir(), 'tt-window.png'), img.toPNG());
-        console.log('[shot] written', path.join(os.tmpdir(), 'tt-window.png'));
+        const wc = mainWin.webContents;
+        const snap = async (name) => {
+          fs.writeFileSync(path.join(os.tmpdir(), name), (await wc.capturePage()).toPNG());
+          console.log('[shot]', name);
+        };
+        await snap('tt-window.png');
+        // exercise the editor + save round-trip on a scratch note
+        const testFile = 'zz-uitest.md';
+        fs.writeFileSync(path.join(NOTES_DIR, testFile), '# Original title\n\nBody line one.\n', 'utf8');
+        await wc.executeJavaScript(`refreshNotes(${JSON.stringify(testFile)})`);
+        await new Promise((r) => setTimeout(r, 400));
+        await wc.executeJavaScript(`document.getElementById('b-edit').click()`);
+        await new Promise((r) => setTimeout(r, 300));
+        await snap('tt-editor.png');
+        await wc.executeJavaScript(`document.getElementById('ed-title').value = 'Edited by uitest'; document.getElementById('b-save').click()`);
+        await new Promise((r) => setTimeout(r, 500));
+        const saved = fs.readFileSync(path.join(NOTES_DIR, testFile), 'utf8').split('\n')[0];
+        console.log('[shot] saved H1:', saved);
+        fs.rmSync(path.join(NOTES_DIR, testFile), { force: true });
+        await wc.executeJavaScript(`selected = null; refreshNotes()`);
+        await new Promise((r) => setTimeout(r, 300));
+        await wc.executeJavaScript(`openDicts()`);
+        await new Promise((r) => setTimeout(r, 300));
+        await snap('tt-dicts.png');
         app.quit();
       }, 3500);
     }
