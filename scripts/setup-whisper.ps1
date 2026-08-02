@@ -5,7 +5,8 @@
 #        powershell -ExecutionPolicy Bypass -File scripts/setup-whisper.ps1 -Dest "$env:USERPROFILE\MeetingNotes\whisper"
 param(
     [string]$Dest = (Join-Path (Split-Path $PSScriptRoot -Parent) 'whisper'),
-    [string[]]$Models = @('medium', 'small')
+    # large-v3-turbo-q5_0 for meetings (fast + accurate), small for dictation
+    [string[]]$Models = @('large-v3-turbo-q5_0', 'small')
 )
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Force $Dest | Out-Null
@@ -35,12 +36,18 @@ foreach ($Model in $Models) {
         Write-Host "Model already present: $modelFile"
         continue
     }
-    Write-Host "Downloading ggml-$Model.bin (medium is ~1.5 GB, small ~470 MB)..."
+    Write-Host "Downloading ggml-$Model.bin (turbo ~575 MB, small ~470 MB)..."
     # -C - resumes a partial download; retries cover flaky connections
     curl.exe -L --fail -sS -C - --retry 8 --retry-delay 3 --retry-all-errors `
         -o "$modelFile.part" "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-$Model.bin"
     if ($LASTEXITCODE -ne 0) { throw "Model download failed (curl exit $LASTEXITCODE). Re-run to resume." }
     Move-Item "$modelFile.part" $modelFile
     Write-Host "Model ready: $modelFile"
+}
+# Silero VAD model: lets whisper skip silence (much faster on meetings)
+$vadFile = Join-Path $Dest 'ggml-silero-v5.1.2.bin'
+if (-not (Test-Path $vadFile)) {
+    Write-Host "Downloading VAD model..."
+    curl.exe -L --fail -sS --retry 5 --retry-all-errors -o $vadFile "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin"
 }
 Write-Host "Setup complete."

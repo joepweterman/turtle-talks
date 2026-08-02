@@ -123,15 +123,13 @@ folder or there.
 
 ## Speed
 
-Whisper **medium** on CPU is roughly realtime — an hour of meeting can take up
-to an hour to transcribe. If that's too slow:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/setup-whisper.ps1 -Model small
-```
-
-and set `WHISPER_MODEL=ggml-small.bin` in `.env`. Small is ~4× faster and still
-good for clean meeting audio (Dutch included).
+Meetings transcribe with **whisper large-v3-turbo** (quantized) plus voice
+activity detection, which skips the silent stretches — measured at ~3-4× faster
+than realtime on a laptop CPU, so an hour of meeting takes roughly 15-20
+minutes to transcribe, with better accuracy than the older medium model
+(especially for Dutch). Dictation uses the small model and comes back in a few
+seconds. To trade accuracy for more speed, set `WHISPER_MODEL=ggml-small.bin`
+in `.env`.
 
 ## Good to know
 

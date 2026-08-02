@@ -172,9 +172,9 @@ async function processRecording(job) {
     console.log('Converting to 16 kHz wav…');
     uiSend('ui:progress', 'Converting audio…');
     await toWav(job.webmPath, wavPath);
-    console.log('Transcribing with whisper.cpp (medium on CPU can take a while)…');
-    uiSend('ui:progress', 'Transcribing (about as long as the meeting itself)…');
-    transcript = await transcribe(wavPath, job.lang, BASE_DIR);
+    console.log('Transcribing with whisper.cpp…');
+    uiSend('ui:progress', 'Transcribing…');
+    transcript = await transcribe(wavPath, job.lang, BASE_DIR, { vad: true, beam: 1 });
   } finally {
     fs.rmSync(wavPath, { force: true });
   }
@@ -434,7 +434,7 @@ ipcMain.on('dict:done', async () => {
     await new Promise((res) => job.stream.end(res));
     overlayShow('transcribing');
     await toWav(job.webmPath, wavPath);
-    const raw = await transcribe(wavPath, DICT_LANG, BASE_DIR, { modelName: DICT_MODEL, suppressNonSpeech: true });
+    const raw = await transcribe(wavPath, DICT_LANG, BASE_DIR, { modelName: DICT_MODEL, suppressNonSpeech: true, beam: 1 });
     const text = cleanDictation(raw);
     if (!text) {
       overlayShow('empty');
