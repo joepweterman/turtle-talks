@@ -18,6 +18,15 @@ left, the selected note rendered on the right, record buttons and dictation
 history in the sidebar. Closing the window keeps the app running in the tray;
 click the tray icon (or the desktop icon again) to bring it back.
 
+Notes get an **auto-generated title** from the summary step (for example
+"Ajax speelt tegen Volendam vandaag") and can be **edited in place**: open a
+note, hit Edit, change the title or the markdown body, Save writes it straight
+back to the file. "View all dictations" shows everything you've ever dictated
+(stored locally in `MeetingNotes\dictations.jsonl`), with per-item copy.
+
+Typography is the DIVR set (Lora, Hanken Grotesk, JetBrains Mono), bundled
+locally so the app stays fully offline.
+
 1. Click **Record EN** / **Opname NL** in the window (or right-click the tray
    icon). Picking the language up front is what tells Whisper which language
    to transcribe, so Dutch meetings don't get mangled.
