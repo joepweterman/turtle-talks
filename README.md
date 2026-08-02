@@ -28,15 +28,26 @@ Tray icon: gray ring = idle, red = recording, amber = making notes.
 
 ## Install
 
-Requirements: Node.js 18+ (tested on 24) and ~2 GB of disk for the model.
+### As a desktop app (recommended)
 
 ```powershell
 git clone <this repo> meeting-notes
 cd meeting-notes
 npm install
 npm run setup     # downloads whisper.cpp + the medium model (~1.5 GB, resumable)
-npm start
+npm run dist      # builds the installer into dist\
 ```
+
+Run the installer from `dist\` — it adds **MeetingNotes** to the Start menu and
+desktop. The installed app looks for `whisper\` and `.env` in
+`C:\Users\<you>\MeetingNotes\` (move them there after `npm run setup`; running
+from source finds them in either place).
+
+### From source
+
+Requirements: Node.js 18+ (tested on 24) and ~2 GB of disk for the model.
+Same steps as above, then `npm start` (or a shortcut to `start.cmd` in
+`shell:startup` to autostart).
 
 ### Permissions you need to grant
 
@@ -46,9 +57,9 @@ npm start
 
 ### Summaries (pick one, or neither)
 
-- **Fully local**: install [Ollama](https://ollama.com/download) and pull a
-  model, e.g. `ollama pull llama3.1:8b`. If Ollama is running, it is always
-  used first — nothing leaves your machine.
+- **Fully local (default)**: install [Ollama](https://ollama.com/download) and
+  pull a model: `ollama pull llama3.1:8b` (set via `OLLAMA_MODEL` in `.env`).
+  If Ollama is running, it is always used first — nothing leaves your machine.
 - **Claude API**: copy `.env.example` to `.env` and set `ANTHROPIC_API_KEY`.
   Used only when Ollama isn't available. The request is sent with Anthropic's
   server-side refusal fallback enabled, so a summary comes back even if a
@@ -80,10 +91,3 @@ good for clean meeting audio (Dutch included).
 - **Self test**: `npm run selftest` records 15 seconds, runs the whole
   pipeline, and quits. Play some speech (or talk) while it runs.
 
-## Packaged build (optional)
-
-`npm run dist` builds an installer into `dist\`. A packaged install looks for
-`whisper\` and `.env` inside `C:\Users\<you>\MeetingNotes\` instead of the
-project folder — move/copy them there. Running from source with `npm start`
-works just as well for daily use; to autostart, put a shortcut to
-`meeting-notes\start.cmd` in `shell:startup`.
