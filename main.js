@@ -29,7 +29,13 @@ let win = null;
 let overlay = null;
 let nudgeWin = null;
 let nudgeHideTimer = null;
+let mainWin = null;
+let quitting = false;
 const watcher = new MeetingWatch();
+
+function uiSend(channel, ...args) {
+  if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send(channel, ...args);
+}
 let state = 'idle'; // meeting recorder: idle | recording | processing
 let rec = null;     // { stamp, lang, webmPath, stream }
 let dict = null;    // dictation in progress: { webmPath, stream }
@@ -56,6 +62,7 @@ function notify(title, body, openPath) {
 function setState(next) {
   state = next;
   updateTray();
+  uiSend('ui:state', { state, recLang: rec ? rec.lang : null });
 }
 
 function updateTray() {
@@ -83,6 +90,7 @@ function updateTray() {
     items.push({ label: 'Transcribing & summarizing…', enabled: false }, { type: 'separator' });
   }
   items.push(
+    { label: 'Open Turtle Talks', click: () => showMainWindow() },
     { label: `Dictate anywhere: ${DICT_HOTKEY.replace(/Control/g, 'Ctrl')}`, click: () => toggleDictation() },
     { type: 'separator' },
     { label: 'Open notes folder', click: () => { fs.mkdirSync(NOTES_DIR, { recursive: true }); shell.openPath(NOTES_DIR); } },
@@ -154,13 +162,16 @@ async function processRecording(job) {
   let transcript;
   try {
     console.log('Converting to 16 kHz wav…');
+    uiSend('ui:progress', 'Converting audio…');
     await toWav(job.webmPath, wavPath);
     console.log('Transcribing with whisper.cpp (medium on CPU can take a while)…');
+    uiSend('ui:progress', 'Transcribing (about as long as the meeting itself)…');
     transcript = await transcribe(wavPath, job.lang, BASE_DIR);
   } finally {
     fs.rmSync(wavPath, { force: true });
   }
   console.log('Summarizing…');
+  uiSend('ui:progress', 'Summarizing…');
   let summary = null;
   try {
     summary = await summarize(transcript, job.lang);
@@ -169,8 +180,77 @@ async function processRecording(job) {
   }
   fs.writeFileSync(mdPath, buildMarkdown(job.stamp, job.lang, transcript, summary), 'utf8');
   console.log('Notes written:', mdPath);
-  notify('Meeting notes ready', path.basename(mdPath), mdPath);
+  uiSend('ui:progress', '');
+  uiSend('ui:notes-changed', path.basename(mdPath));
+  const n = new Notification({ title: 'Meeting notes ready', body: path.basename(mdPath) });
+  n.on('click', () => { showMainWindow(); uiSend('ui:select-note', path.basename(mdPath)); });
+  n.show();
 }
+
+// ---------- main window ----------
+
+function createMainWindow() {
+  mainWin = new BrowserWindow({
+    width: 1060,
+    height: 700,
+    minWidth: 820,
+    minHeight: 560,
+    show: false,
+    title: 'Turtle Talks',
+    icon: path.join(__dirname, 'build', 'icon.ico'),
+    backgroundColor: '#f7f1e1',
+    webPreferences: { preload: path.join(__dirname, 'preload.js') },
+  });
+  mainWin.removeMenu();
+  mainWin.loadFile('renderer/app.html');
+  mainWin.on('close', (e) => {
+    if (!quitting) { e.preventDefault(); mainWin.hide(); } // stay alive in the tray
+  });
+}
+
+function showMainWindow() {
+  if (!mainWin) return;
+  if (mainWin.isMinimized()) mainWin.restore();
+  mainWin.show();
+  mainWin.focus();
+}
+
+ipcMain.handle('ui:get-state', () => ({
+  state,
+  recLang: rec ? rec.lang : null,
+  hotkey: DICT_HOTKEY.replace(/Control/g, 'Ctrl'),
+  dictHistory,
+}));
+
+ipcMain.handle('ui:list-notes', () => {
+  fs.mkdirSync(NOTES_DIR, { recursive: true });
+  return fs.readdirSync(NOTES_DIR)
+    .filter((f) => f.endsWith('.md'))
+    .map((f) => {
+      const st = fs.statSync(path.join(NOTES_DIR, f));
+      let lang = '';
+      try {
+        const head = fs.readFileSync(path.join(NOTES_DIR, f), 'utf8').slice(0, 200);
+        if (head.includes('(Nederlands)')) lang = 'NL';
+        else if (head.includes('(English)')) lang = 'EN';
+      } catch {}
+      return { file: f, mtime: st.mtimeMs, lang };
+    })
+    .sort((a, b) => b.mtime - a.mtime);
+});
+
+ipcMain.handle('ui:read-note', (e, file) => {
+  const p = path.join(NOTES_DIR, path.basename(String(file)));
+  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
+});
+
+ipcMain.on('ui:start', (e, lang) => startRecording(lang === 'nl' ? 'nl' : 'en'));
+ipcMain.on('ui:stop', () => stopRecording());
+ipcMain.on('ui:open-folder', () => { fs.mkdirSync(NOTES_DIR, { recursive: true }); shell.openPath(NOTES_DIR); });
+ipcMain.on('ui:open-rel', (e, rel) => {
+  const p = path.join(NOTES_DIR, path.basename(String(rel)));
+  if (fs.existsSync(p)) shell.openPath(p);
+});
 
 // ---------- dictation (Wispr Flow-style) ----------
 
@@ -240,19 +320,49 @@ function cancelDictation() {
   dict = null;
 }
 
-function sendPaste() {
+const USER32 = `using System;
+using System.Runtime.InteropServices;
+public class U {
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+}`;
+
+function runPs(command) {
   return new Promise((resolve) => {
-    const ps = spawn('powershell.exe', [
-      '-NoProfile', '-Command',
-      "$w = New-Object -ComObject wscript.shell; $w.SendKeys('^v')",
-    ], { windowsHide: true });
-    ps.on('close', resolve);
-    ps.on('error', resolve);
+    const ps = spawn('powershell.exe', ['-NoProfile', '-Command', command], { windowsHide: true });
+    let out = '';
+    ps.stdout.on('data', (d) => { out += d; });
+    ps.on('close', () => resolve(out.trim()));
+    ps.on('error', () => resolve(''));
   });
 }
 
+// remember which window the user was dictating into, so a slow transcription
+// can't paste into whatever happens to be focused later
+function getForegroundWindow() {
+  return runPs(`Add-Type '${USER32}'; [U]::GetForegroundWindow()`);
+}
+
+function sendPaste(hwnd) {
+  const activate = hwnd && /^\d+$/.test(hwnd)
+    ? `Add-Type '${USER32}'; [U]::SetForegroundWindow([IntPtr]${hwnd}) | Out-Null; Start-Sleep -Milliseconds 150; `
+    : '';
+  return runPs(`${activate}$w = New-Object -ComObject wscript.shell; $w.SendKeys('^v')`);
+}
+
+// whisper's classic hallucinations on (near-)silence
+const HALLUCINATIONS = [
+  /^thanks? (you )?for watching[.!]?$/i,
+  /^bedankt voor het kijken[.!]?$/i,
+  /amara\.org/i,
+  /^ondertitel(s|d|ing)? /i,
+  /^untertitel/i,
+  /^sous-?titr/i,
+  /^sottotitoli/i,
+];
+
 function cleanDictation(raw) {
-  return raw
+  const text = raw
     .split(/\r?\n/)
     .map((s) => s.trim())
     .filter(Boolean)
@@ -260,6 +370,16 @@ function cleanDictation(raw) {
     .replace(/\[[A-Z_ ]+\]/g, '')      // [BLANK_AUDIO], [MUSIC], …
     .replace(/\s{2,}/g, ' ')
     .trim();
+  if (text.length < 2) return '';
+  if (HALLUCINATIONS.some((re) => re.test(text))) return '';
+  return text;
+}
+
+const dictHistory = []; // last dictations, newest first: {ts, text, pasted}
+function pushDictHistory(entry) {
+  dictHistory.unshift(entry);
+  if (dictHistory.length > 8) dictHistory.pop();
+  uiSend('ui:dict', dictHistory);
 }
 
 ipcMain.on('dict:chunk', (e, data) => { if (dict) dict.stream.write(Buffer.from(data)); });
@@ -277,20 +397,27 @@ ipcMain.on('dict:done', async () => {
   dictBusy = true;
   const wavPath = job.webmPath.replace(/\.webm$/, '.wav');
   try {
+    const hwndPromise = getForegroundWindow(); // where the user was when they stopped
     await new Promise((res) => job.stream.end(res));
     overlayShow('transcribing');
     await toWav(job.webmPath, wavPath);
-    const raw = await transcribe(wavPath, DICT_LANG, BASE_DIR, { modelName: DICT_MODEL });
+    const raw = await transcribe(wavPath, DICT_LANG, BASE_DIR, { modelName: DICT_MODEL, suppressNonSpeech: true });
     const text = cleanDictation(raw);
     if (!text) {
       overlayShow('empty');
       overlayHide(1500);
     } else if (DICTTEST) {
       console.log('[dicttest] TEXT:', text);
+      pushDictHistory({ ts: Date.now(), text, pasted: false });
       overlayHide();
     } else {
       clipboard.writeText(text); // stays in clipboard as fallback
-      await sendPaste();
+      let pasted = false;
+      if (clipboard.readText() === text) { // never paste anything that isn't our transcript
+        await sendPaste(await hwndPromise);
+        pasted = true;
+      }
+      pushDictHistory({ ts: Date.now(), text, pasted });
       overlayShow('done');
       overlayHide(900);
     }
@@ -363,9 +490,8 @@ watcher.on('meeting-stop', () => {
 
 app.on('window-all-closed', () => { /* keep running in the tray */ });
 app.on('will-quit', () => { if (app.isReady()) globalShortcut.unregisterAll(); });
-app.on('second-instance', () => {
-  notify('Turtle Talks', 'Already running — find the turtle in the tray, next to the clock.');
-});
+app.on('before-quit', () => { quitting = true; });
+app.on('second-instance', () => showMainWindow());
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -388,8 +514,21 @@ if (!app.requestSingleInstanceLock()) {
     win.loadFile('renderer/recorder.html');
     createOverlay();
     createNudge();
+    createMainWindow();
     tray = new Tray(icon('idle'));
+    tray.on('click', () => showMainWindow());
     updateTray();
+
+    const TESTMODE = SELFTEST || DICTTEST || NUDGETEST;
+    if (!TESTMODE) showMainWindow();
+    if (process.argv.includes('--shot')) {
+      setTimeout(async () => {
+        const img = await mainWin.webContents.capturePage();
+        fs.writeFileSync(path.join(os.tmpdir(), 'tt-window.png'), img.toPNG());
+        console.log('[shot] written', path.join(os.tmpdir(), 'tt-window.png'));
+        app.quit();
+      }, 3500);
+    }
 
     const ok = globalShortcut.register(DICT_HOTKEY, toggleDictation);
     if (!ok) {
@@ -398,9 +537,6 @@ if (!app.requestSingleInstanceLock()) {
     }
 
     if (!SELFTEST && !DICTTEST) watcher.start();
-    if (!SELFTEST && !DICTTEST && !NUDGETEST) {
-      notify('Turtle Talks is running', `Find the turtle in the tray to record meetings. Dictate anywhere with ${DICT_HOTKEY.replace(/Control/g, 'Ctrl')}.`);
-    }
 
     if (SELFTEST) {
       const secs = Number(process.env.SELFTEST_SECONDS || 15);

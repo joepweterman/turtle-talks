@@ -9,4 +9,17 @@ contextBridge.exposeInMainWorld('api', {
   dictDone: () => ipcRenderer.send('dict:done'),
   dictError: (msg) => ipcRenderer.send('dict:error', String(msg)),
   nudgeAction: (action, arg) => ipcRenderer.send('nudge:action', action, arg),
+  // main window
+  getState: () => ipcRenderer.invoke('ui:get-state'),
+  listNotes: () => ipcRenderer.invoke('ui:list-notes'),
+  readNote: (file) => ipcRenderer.invoke('ui:read-note', file),
+  start: (lang) => ipcRenderer.send('ui:start', lang),
+  stop: () => ipcRenderer.send('ui:stop'),
+  openFolder: () => ipcRenderer.send('ui:open-folder'),
+  openRel: (rel) => ipcRenderer.send('ui:open-rel', rel),
+  onState: (cb) => ipcRenderer.on('ui:state', (e, s) => cb(s)),
+  onProgress: (cb) => ipcRenderer.on('ui:progress', (e, t) => cb(t)),
+  onNotesChanged: (cb) => ipcRenderer.on('ui:notes-changed', (e, f) => cb(f)),
+  onSelectNote: (cb) => ipcRenderer.on('ui:select-note', (e, f) => cb(f)),
+  onDict: (cb) => ipcRenderer.on('ui:dict', (e, h) => cb(h)),
 });
