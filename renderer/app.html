@@ -367,14 +367,43 @@
       const day = dt.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' });
       if (day !== lastDay) { html += `<div class="day">${day}</div>`; lastDay = day; }
       const time = dt.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-      html += `<div class="drow"><span class="time">${time}</span><span class="text">${esc(d.text)}</span>` +
-        `<span class="flag">${d.pasted ? 'pasted' : 'clipboard'}</span><span class="copy" data-t="${esc(d.text)}">Copy</span></div>`;
+      html += `<div class="drow" data-ts="${d.ts}"><span class="time">${time}</span><span class="text">${esc(d.text)}</span>` +
+        `<span class="flag">${d.pasted ? 'pasted' : 'clipboard'}</span>` +
+        `<span class="copy" data-t="${esc(d.text)}">Copy</span><span class="copy fix">Fix</span></div>`;
     }
     c.innerHTML = html;
-    for (const el of document.querySelectorAll('.copy')) {
+    for (const el of document.querySelectorAll('.copy:not(.fix)')) {
       el.onclick = () => { window.api.copyText(el.dataset.t); el.textContent = 'Copied'; setTimeout(() => { el.textContent = 'Copy'; }, 1200); };
     }
+    for (const el of document.querySelectorAll('.fix')) {
+      el.onclick = () => startFix(el.closest('.drow'));
+    }
     setButtons();
+  }
+
+  // correct a dictation in place — the app learns from the edit
+  function startFix(row) {
+    const ts = Number(row.dataset.ts);
+    const entry = dictAll.find((d) => d.ts === ts);
+    if (!entry) return;
+    const textEl = row.querySelector('.text');
+    textEl.innerHTML = `<input type="text" style="width:100%;box-sizing:border-box;font:inherit;padding:4px 8px;border:1px solid #235244;border-radius:6px;background:#fff" value="${esc(entry.text)}">`;
+    const input = textEl.querySelector('input');
+    input.focus();
+    input.onkeydown = async (ev) => {
+      if (ev.key === 'Escape') { openDicts(); }
+      if (ev.key === 'Enter') {
+        const res = await window.api.fixDictation(ts, input.value.trim());
+        openDicts();
+        if (res.learned && res.learned.length && mode === 'dicts') {
+          const c = $('content');
+          const note = document.createElement('div');
+          note.style.cssText = 'font-size:12.5px;color:#235244;margin:8px 0';
+          note.textContent = `Learned: ${res.learned.map((p) => `"${p.from}" -> "${p.to}"`).join(', ')}`;
+          c.prepend(note);
+        }
+      }
+    };
   }
 
   function renderDictPeek() {
@@ -463,6 +492,12 @@
       <div class="set-row"><label>Anthropic API key</label>
         <div class="help">Only used when summaries go through Claude. Stored locally in MeetingNotes\\settings.json.</div>
         <input type="password" id="s-anthropicKey" value="${esc(s.anthropicKey)}"></div>
+      <div class="set-row"><label>Learned corrections</label>
+        <div class="help">One per line as "wrong -> right". Grows automatically when you fix a dictation or edit a transcript.</div>
+        <textarea id="s-corrections">${esc((s.corrections || []).map((p) => `${p.from} -> ${p.to}`).join('\n'))}</textarea></div>
+      <div class="set-row"><label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="s-multiSpeaker" ${s.multiSpeaker ? 'checked' : ''}> Multiple people in the room</label>
+        <div class="help">Splits your microphone into Speaker 1 / Speaker 2 / … when several people share this computer (adds a speaker-detection pass after the meeting).</div></div>
       <button id="set-save">Save settings</button>
       <div id="set-msg"></div>
     </div>`;
@@ -472,6 +507,10 @@
 
   async function saveSettings() {
     const val = (id) => document.getElementById(id).value;
+    const corrections = val('s-corrections').split(/\r?\n/)
+      .map((line) => line.split(/\s*->\s*/))
+      .filter((p) => p.length === 2 && p[0].trim() && p[1].trim())
+      .map(([from, to]) => ({ from: from.trim().toLowerCase(), to: to.trim() }));
     const res = await window.api.saveSettings({
       yourName: val('s-yourName').trim() || 'You',
       vocabulary: val('s-vocabulary').trim(),
@@ -482,6 +521,8 @@
       summarizer: val('s-summarizer'),
       ollamaModel: val('s-ollamaModel').trim(),
       anthropicKey: val('s-anthropicKey').trim(),
+      corrections,
+      multiSpeaker: document.getElementById('s-multiSpeaker').checked,
     });
     const msg = document.getElementById('set-msg');
     if (res.ok) {

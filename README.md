@@ -29,6 +29,19 @@ label), a personal **vocabulary** so whisper recognises names and jargon, the
 dictation hotkey and language, model choices, and the summarizer (local Ollama,
 Claude, or none). Settings live in `MeetingNotes\settings.json`.
 
+**Turtle Talks learns from your edits.** Fix a dictation (the "Fix" button in
+the history) or correct a word in a note's transcript, and the change is
+learned as a correction: next time whisper writes "total talks", it becomes
+"Turtle Talks" automatically. Learned pairs are visible and editable in
+Settings.
+
+**Multiple people in the room?** Enable it in Settings and run
+`scripts/setup-diarize.ps1` once (~80 MB of local speaker-detection models).
+The mic side of the transcript is then split into Speaker 1 / Speaker 2 / …
+after the meeting. Works best when voices are reasonably distinct. In Teams
+1-on-1 calls the other side is labeled with their real name when it's visible
+in the window title.
+
 Typography is the DIVR set (Lora, Hanken Grotesk, JetBrains Mono), bundled
 locally so the app stays fully offline.
 

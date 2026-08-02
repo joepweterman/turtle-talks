@@ -29,4 +29,5 @@ contextBridge.exposeInMainWorld('api', {
   copyText: (t) => clipboard.writeText(String(t)),
   getSettings: () => ipcRenderer.invoke('ui:get-settings'),
   saveSettings: (patch) => ipcRenderer.invoke('ui:save-settings', patch),
+  fixDictation: (ts, text) => ipcRenderer.invoke('ui:fix-dictation', { ts, text }),
 });

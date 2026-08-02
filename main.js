@@ -15,6 +15,8 @@ const { summarize } = require('./lib/summarize');
 const { buildMarkdown, buildTurns, turnsToMarkdown, speakerLabels, fmtMs, filterEcho } = require('./lib/notes');
 const { MeetingWatch } = require('./lib/meetingwatch');
 const config = require('./lib/config');
+const { learnPairs, applyCorrections, mergePairs } = require('./lib/corrections');
+const { diarizeTrack } = require('./lib/diarize');
 
 const SELFTEST = process.argv.includes('--selftest');
 const DICTTEST = process.argv.includes('--dicttest');
@@ -234,8 +236,22 @@ async function transcribeSegment(job, seg) {
       prompt: config.vocabPrompt() || undefined,
       threads: state === 'recording' ? 4 : undefined, // leave CPU for the ongoing call
     });
+    // whisper leaks the vocabulary prompt into (near-)silent audio — drop
+    // parts made up entirely of glossary words
+    const vocabWords = new Set(
+      `${cfg().vocabulary} ${cfg().yourName}`.toLowerCase().split(/[\s,]+/).filter(Boolean),
+    );
     for (const p of parts) {
-      job.results.push({ track: seg.track, fromMs: seg.startMs + p.fromMs, toMs: seg.startMs + p.toMs, text: p.text });
+      const w = p.text.toLowerCase().replace(/[^\p{L}\p{N} ]/gu, ' ').split(/\s+/).filter(Boolean);
+      if (w.length > 0 && w.every((x) => vocabWords.has(x))) continue;
+      job.results.push({
+        track: seg.track,
+        segIndex: seg.index,
+        segStartMs: seg.startMs,
+        fromMs: seg.startMs + p.fromMs,
+        toMs: seg.startMs + p.toMs,
+        text: applyCorrections(p.text, cfg().corrections),
+      });
     }
     pushLive(job);
   } finally {
@@ -243,11 +259,33 @@ async function transcribeSegment(job, seg) {
   }
 }
 
+// people's names in meeting window titles, e.g. "Maria Lopez | Microsoft Teams"
+function counterpartFromTitle(title) {
+  if (!title) return '';
+  const m = title.match(/^(.*?)\s*[|–-]\s*Microsoft Teams/i);
+  if (!m) return '';
+  const name = m[1].trim();
+  if (/meeting|vergadering|chat|agenda|calendar|activity/i.test(name)) return '';
+  if (/^[A-ZÀ-Ž][\p{L}'.-]+(\s[A-ZÀ-Ž(][\p{L}'.)-]+){0,3}$/u.test(name)) return name;
+  return '';
+}
+
+function labeledResults(job, withSpeakers) {
+  const labels = speakerLabels(job.lang, cfg().yourName);
+  const counterpart = counterpartFromTitle(job.context);
+  const spks = new Set((job.results || []).filter((r) => r.spk !== undefined).map((r) => r.spk));
+  return filterEcho(job.results).map((r) => ({
+    ...r,
+    label: r.track === 'sys'
+      ? (counterpart || labels.sys)
+      : (withSpeakers && r.spk !== undefined && spks.size > 1 ? `Speaker ${r.spk + 1}` : labels.mic),
+  }));
+}
+
 function pushLive(job) {
   if (rec !== job || state !== 'recording') return;
-  const labels = speakerLabels(job.lang, cfg().yourName);
-  const turns = buildTurns(filterEcho(job.results)).slice(-40).map((t) => ({
-    label: labels[t.track],
+  const turns = buildTurns(labeledResults(job, false)).slice(-40).map((t) => ({
+    label: t.label,
     time: fmtMs(t.fromMs),
     text: t.text,
     track: t.track,
@@ -279,36 +317,69 @@ async function mixAudio(job) {
     if (!fs.existsSync(seg.file) || fs.statSync(seg.file).size === 0) continue;
     (byTrack[seg.track] = byTrack[seg.track] || []).push(seg);
   }
-  const trackFiles = [];
+  const trackFiles = {};
   const temp = [];
   for (const track of ['mic', 'sys']) {
     const segs = (byTrack[track] || []).sort((a, b) => a.index - b.index);
     if (segs.length === 0) continue;
     if (segs.length === 1) {
-      trackFiles.push(segs[0].file);
+      trackFiles[track] = segs[0].file;
     } else {
       const list = path.join(NOTES_DIR, `${job.stamp}.${track}.txt`);
       fs.writeFileSync(list, segs.map((s) => `file '${s.file.replace(/\\/g, '/')}'`).join('\n'));
       const out = path.join(NOTES_DIR, `${job.stamp}.${track}.webm`);
       await runCmd(ffmpegPath(), ['-y', '-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', out]);
       temp.push(list, out);
-      trackFiles.push(out);
+      trackFiles[track] = out;
     }
   }
-  if (trackFiles.length === 0) throw new Error('no audio was recorded');
-  if (trackFiles.length === 1) {
-    fs.copyFileSync(trackFiles[0], finalPath);
+  const files = Object.values(trackFiles);
+  if (files.length === 0) throw new Error('no audio was recorded');
+  if (files.length === 1) {
+    fs.copyFileSync(files[0], finalPath);
   } else {
     await runCmd(ffmpegPath(), [
-      '-y', '-i', trackFiles[0], '-i', trackFiles[1],
+      '-y', '-i', files[0], '-i', files[1],
       '-filter_complex', '[0:a][1:a]amix=inputs=2:duration=longest:dropout_transition=0[a]',
       '-map', '[a]', '-c:a', 'libopus', '-b:a', '64000', finalPath,
     ]);
   }
-  // raw segments are no longer needed once the mixed file exists
-  for (const seg of job.segs.values()) fs.rmSync(seg.file, { force: true });
-  for (const f of temp) fs.rmSync(f, { force: true });
-  return finalPath;
+  return {
+    finalPath,
+    micPath: trackFiles.mic || null,
+    cleanup: () => {
+      for (const seg of job.segs.values()) fs.rmSync(seg.file, { force: true });
+      for (const f of temp) fs.rmSync(f, { force: true });
+    },
+  };
+}
+
+// several people share this microphone → split the mic track into speakers
+async function diarizeMic(job, micPath) {
+  const micParts = job.results.filter((r) => r.track === 'mic');
+  if (micParts.length === 0) return;
+  uiSend('ui:progress', 'Detecting speakers…');
+  const wav = path.join(os.tmpdir(), `${job.stamp}.diar.wav`);
+  try {
+    await toWav(micPath, wav);
+    const diarSegs = await diarizeTrack(wav);
+    if (diarSegs.length === 0) return;
+    // whisper offsets are wall-clock; diarization runs on the concatenated
+    // track — recording is continuous, so wall-clock ≈ concat position
+    const firstMicStart = Math.min(...micParts.map((r) => r.segStartMs));
+    for (const r of micParts) {
+      r.concatFromMs = r.fromMs - firstMicStart;
+      r.concatToMs = r.toMs - firstMicStart;
+    }
+    const { assignSpeakers } = require('./lib/diarize');
+    assignSpeakers(micParts, diarSegs);
+    const spks = new Set(micParts.filter((r) => r.spk !== undefined).map((r) => r.spk));
+    console.log(`diarization: ${spks.size} speaker(s) on the mic track`);
+  } catch (err) {
+    console.error('diarization skipped:', err.message || err);
+  } finally {
+    fs.rmSync(wav, { force: true });
+  }
 }
 
 async function processRecording(job) {
@@ -317,9 +388,11 @@ async function processRecording(job) {
   await job.liveQueue;
   console.log('Mixing audio…');
   uiSend('ui:progress', 'Mixing audio…');
-  await mixAudio(job);
-  const turns = buildTurns(filterEcho(job.results));
-  const transcript = turnsToMarkdown(turns, job.lang, cfg().yourName);
+  const mixed = await mixAudio(job);
+  if (cfg().multiSpeaker && mixed.micPath) await diarizeMic(job, mixed.micPath);
+  mixed.cleanup();
+  const turns = buildTurns(labeledResults(job, true));
+  const transcript = turnsToMarkdown(turns);
   console.log('Summarizing…');
   uiSend('ui:progress', 'Summarizing…');
   let summary = null;
@@ -434,11 +507,41 @@ ipcMain.handle('ui:read-note', (e, file) => {
   return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
 });
 
+function learnFromEdit(original, edited) {
+  const pairs = learnPairs(original, edited);
+  if (pairs.length === 0) return [];
+  config.set({ corrections: mergePairs(cfg().corrections, pairs) });
+  console.log('learned corrections:', pairs.map((p) => `${p.from} → ${p.to}`).join('; '));
+  notify('Turtle Talks learned from your edit', pairs.map((p) => `"${p.from}" → "${p.to}"`).join(', '));
+  return pairs;
+}
+
 ipcMain.handle('ui:save-note', (e, payload) => {
   const file = path.basename(String(payload.file));
   if (!file.endsWith('.md')) return false;
-  fs.writeFileSync(path.join(NOTES_DIR, file), String(payload.content), 'utf8');
-  return true;
+  const p = path.join(NOTES_DIR, file);
+  let learned = [];
+  try {
+    // learn transcription fixes from edits to the transcript section
+    const oldMd = fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
+    const oldTr = (oldMd.split(/## Transcript/i)[1] || '').trim();
+    const newTr = (String(payload.content).split(/## Transcript/i)[1] || '').trim();
+    if (oldTr && newTr) learned = learnFromEdit(oldTr, newTr);
+  } catch {}
+  fs.writeFileSync(p, String(payload.content), 'utf8');
+  return { ok: true, learned };
+});
+
+ipcMain.handle('ui:fix-dictation', (e, payload) => {
+  const entry = dictHistory.find((d) => d.ts === payload.ts);
+  if (!entry) return { ok: false };
+  const learned = learnFromEdit(entry.text, String(payload.text));
+  entry.text = String(payload.text);
+  try {
+    fs.writeFileSync(DICT_LOG, [...dictHistory].reverse().map((d) => JSON.stringify(d)).join('\n') + '\n');
+  } catch (err) { console.error('could not rewrite dictation history:', err); }
+  uiSend('ui:dict', dictHistory);
+  return { ok: true, learned };
 });
 
 ipcMain.on('ui:start', (e, lang) => startRecording(lang === 'nl' ? 'nl' : 'en'));
@@ -609,7 +712,7 @@ ipcMain.on('dict:done', async () => {
       beam: 1,
       prompt: config.vocabPrompt() || undefined,
     });
-    const text = cleanDictation(raw);
+    const text = applyCorrections(cleanDictation(raw), cfg().corrections);
     if (!text) {
       overlayShow('empty');
       overlayHide(1500);
