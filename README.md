@@ -75,7 +75,8 @@ DICTATE_LANG=auto                  # or force nl / en
 
 1. Download **Turtle Talks Setup x.x.x.exe** from the
    [latest release](https://github.com/joepweterman/turtle-talks/releases/latest)
-   and run it (per-user install, no admin needed).
+   and run it (per-user install, no admin needed). Windows SmartScreen may warn
+   because the app is unsigned: choose "More info", then "Run anyway".
 2. Download the speech models (~2 GB, one time, resumable) by pasting this in
    PowerShell:
 
