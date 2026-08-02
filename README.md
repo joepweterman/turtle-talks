@@ -13,9 +13,14 @@ that is skipped if you run [Ollama](https://ollama.com) locally.
 
 ## How it works
 
-1. Right-click the tray icon → **Start recording (English)** or
-   **Start opname (Nederlands)**. Picking the language up front is what tells
-   Whisper which language to transcribe, so Dutch meetings don't get mangled.
+Launching the app opens the **Turtle Talks window**: your meeting notes on the
+left, the selected note rendered on the right, record buttons and dictation
+history in the sidebar. Closing the window keeps the app running in the tray;
+click the tray icon (or the desktop icon again) to bring it back.
+
+1. Click **Record EN** / **Opname NL** in the window (or right-click the tray
+   icon). Picking the language up front is what tells Whisper which language
+   to transcribe, so Dutch meetings don't get mangled.
 2. System audio (whatever plays through your speakers/headset — Teams, Meet,
    Zoom) and your microphone are mixed and recorded.
 3. Click **Stop and make notes**. The app converts the audio, runs whisper.cpp,
