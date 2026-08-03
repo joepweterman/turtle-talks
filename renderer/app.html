@@ -94,6 +94,7 @@
     transition: background .16s var(--ease), border-color .16s var(--ease);
   }
   .mini:hover { background: rgba(31, 43, 37, .05); border-color: rgba(31, 43, 37, .25); }
+  .mini:disabled { opacity: .55; cursor: default; }
   .mini.primary { background: var(--green); color: var(--cream); border-color: var(--green); }
   .mini.primary:hover { background: var(--green-2); }
 
@@ -208,6 +209,7 @@
     <div id="topbar">
       <div id="view-title">Turtle Talks</div>
       <button class="mini" id="b-edit" style="display:none">Edit</button>
+      <button class="mini" id="b-resum" style="display:none">Re-summarize</button>
       <button class="mini" id="b-audio" style="display:none">Play audio</button>
       <button class="mini" id="b-file" style="display:none">Open file</button>
       <button class="mini" id="b-folder">Open folder</button>
@@ -233,7 +235,9 @@
   let appState = 'idle';
   let liveTurns = [];
 
-  const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // also escapes double quotes: esc() output ends up inside value="…" and
+  // data-*="…" attributes, where a bare quote would truncate the content
+  const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
   function inline(t) {
     return esc(t)
@@ -284,6 +288,7 @@
 
   function setButtons() {
     $('b-edit').style.display = mode === 'note' && selected ? '' : 'none';
+    $('b-resum').style.display = mode === 'note' && selected ? '' : 'none';
     $('b-audio').style.display = mode === 'note' && selected && currentMd.includes('.webm') ? '' : 'none';
     $('b-file').style.display = mode === 'note' && selected ? '' : 'none';
     $('b-folder').style.display = mode === 'edit' || mode === 'settings' ? 'none' : '';
@@ -327,6 +332,9 @@
     for (const a of document.querySelectorAll('#content a[data-rel]')) {
       a.onclick = (e) => { e.preventDefault(); window.api.openRel(a.dataset.rel); };
     }
+    const noSummary = currentMd.includes('_No summary') || currentMd.includes('_Geen samenvatting');
+    $('b-resum').textContent = noSummary ? 'Summarize' : 'Re-summarize';
+    $('b-resum').disabled = false;
     setButtons();
   }
 
@@ -478,6 +486,12 @@
         </select></div>
       <div class="set-row"><label>Dictation model</label>
         <select id="s-dictModel">${modelOpts(s.dictModel)}</select></div>
+      <div class="set-row"><label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="s-dictCleanup" ${s.dictCleanup ? 'checked' : ''}> Polish dictations with AI</label>
+        <div class="help">A local Ollama model removes filler words ("uh", "nou ja") and applies self-corrections ("Monday... no wait, Tuesday" pastes as "Tuesday") before pasting. Only runs when fillers are detected, adding a second or two.</div></div>
+      <div class="set-row"><label>Polish model</label>
+        <div class="help">Empty = the summary model (recommended — small models translate or mangle Dutch).</div>
+        <input type="text" id="s-cleanupModel" value="${esc(s.cleanupModel)}"></div>
       <div class="set-row"><label>Meeting model</label>
         <select id="s-meetingModel">${modelOpts(s.meetingModel, [{ value: '', label: 'Auto (large-v3-turbo, falls back to medium)' }])}</select></div>
       <div class="set-row"><label>Summaries</label>
@@ -517,6 +531,8 @@
       dictHotkey: val('s-dictHotkey').trim() || 'Control+Alt+T',
       dictLang: val('s-dictLang'),
       dictModel: val('s-dictModel'),
+      dictCleanup: document.getElementById('s-dictCleanup').checked,
+      cleanupModel: val('s-cleanupModel').trim(),
       meetingModel: val('s-meetingModel'),
       summarizer: val('s-summarizer'),
       ollamaModel: val('s-ollamaModel').trim(),
@@ -543,6 +559,20 @@
   $('b-file').onclick = () => selected && window.api.openRel(selected);
   $('b-audio').onclick = () => selected && window.api.openRel(selected.replace(/\.md$/, '.webm'));
   $('b-edit').onclick = openEditor;
+  $('b-resum').onclick = async () => {
+    if (!selected || mode !== 'note') return;
+    const b = $('b-resum');
+    if (b.disabled) return;
+    b.disabled = true;
+    b.textContent = 'Summarizing…';
+    const res = await window.api.resummarize(selected);
+    if (res.ok) {
+      await refreshNotes(selected); // reopens the note, which resets the button
+    } else {
+      b.textContent = res.error || 'Failed';
+      setTimeout(() => { if (mode === 'note' && selected) openNote(selected); }, 2500);
+    }
+  };
   $('b-save').onclick = saveEditor;
   $('b-cancel').onclick = () => (selected ? openNote(selected) : openDicts());
   $('b-settings').onclick = openSettings;

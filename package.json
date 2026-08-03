@@ -1,6 +1,6 @@
 {
   "name": "meeting-notes",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "Turtle Talks: local meeting notes and dictation — records system audio + mic, transcribes with whisper.cpp (Dutch + English), summarizes locally or via Claude",
   "main": "main.js",
   "author": "Joep Weterman",
@@ -39,7 +39,8 @@
       "package.json"
     ],
     "asarUnpack": [
-      "node_modules/ffmpeg-static/**"
+      "node_modules/ffmpeg-static/**",
+      "lib/ov-worker.py"
     ],
     "win": {
       "target": "nsis",

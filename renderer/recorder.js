@@ -1,8 +1,10 @@
 // Hidden-window recorder.
 // Meetings: records the microphone ("you") and Windows loopback audio ("them")
-// as two separate tracks, rotated into standalone ~3-minute webm segments so
+// as two separate tracks, rotated into standalone 1-minute webm segments so
 // the main process can transcribe them live while the meeting continues.
-const CHUNK_MS = 180000;
+// Shorter segments mean less audio still waiting to be transcribed when you
+// press stop — that tail is what you wait for before the notes appear.
+const CHUNK_MS = 60000;
 
 let tracks = [];        // active TrackRecorder instances
 let stopping = false;
@@ -132,40 +134,45 @@ function cleanupMeeting() {
 }
 
 // ---------- dictation: mic only, independent of the meeting recorder ----------
-let dictRecorder = null;
+// Records 16kHz mono Int16 PCM via an AudioWorklet so the main process can
+// hand whisper a ready WAV — no webm decode between stop and transcription.
 let dictStream = null;
-let dictQueue = Promise.resolve();
+let dictCtx = null;
+let dictNode = null;
+
+function dictCleanupAudio() {
+  if (dictStream) dictStream.getTracks().forEach((t) => t.stop());
+  if (dictCtx) dictCtx.close().catch(() => {});
+  dictStream = null;
+  dictCtx = null;
+  dictNode = null;
+}
 
 window.__dictStart = async () => {
   try {
     dictStream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
-    dictRecorder = new MediaRecorder(dictStream, {
-      mimeType: 'audio/webm;codecs=opus',
-      audioBitsPerSecond: 64000,
-    });
-    dictRecorder.ondataavailable = (ev) => {
-      if (!ev.data || ev.data.size === 0) return;
-      dictQueue = dictQueue.then(async () => window.api.dictChunk(await ev.data.arrayBuffer()));
+    dictCtx = new AudioContext({ sampleRate: 16000 });
+    await dictCtx.audioWorklet.addModule('pcm-worklet.js');
+    dictNode = new AudioWorkletNode(dictCtx, 'pcm-capture');
+    dictNode.port.onmessage = (ev) => {
+      if (ev.data === 'flushed') {
+        dictCleanupAudio();
+        window.api.dictDone();
+      } else {
+        window.api.dictChunk(ev.data);
+      }
     };
-    dictRecorder.onstop = async () => {
-      await dictQueue;
-      dictStream.getTracks().forEach((t) => t.stop());
-      dictStream = null;
-      dictRecorder = null;
-      window.api.dictDone();
-    };
-    dictRecorder.start(500);
-    window.api.log('dictation started');
+    dictCtx.createMediaStreamSource(dictStream).connect(dictNode);
+    await dictCtx.resume();
+    window.api.log('dictation started (16k pcm)');
   } catch (err) {
-    if (dictStream) dictStream.getTracks().forEach((t) => t.stop());
-    dictStream = null;
-    dictRecorder = null;
+    dictCleanupAudio();
     window.api.dictError(err.message || String(err));
   }
 };
 
 window.__dictStop = () => {
-  if (dictRecorder && dictRecorder.state !== 'inactive') dictRecorder.stop();
+  if (dictNode) dictNode.port.postMessage('flush');
 };

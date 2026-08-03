@@ -11,10 +11,12 @@ const BASE_DIR = app.isPackaged ? NOTES_DIR : __dirname;
 require('dotenv').config({ path: path.join(BASE_DIR, '.env'), quiet: true });
 
 const { toWav, transcribe, transcribeSegments } = require('./lib/transcribe');
-const { summarize } = require('./lib/summarize');
-const { buildMarkdown, buildTurns, turnsToMarkdown, speakerLabels, fmtMs, filterEcho } = require('./lib/notes');
+const { summarize, prewarm } = require('./lib/summarize');
+const { buildMarkdown, buildTurns, turnsToMarkdown, speakerLabels, fmtMs, filterEcho, parseNote, prettyStamp } = require('./lib/notes');
 const { MeetingWatch } = require('./lib/meetingwatch');
 const config = require('./lib/config');
+const ov = require('./lib/ovengine');
+const { cleanupDictation, prewarmCleanup } = require('./lib/cleanup');
 const { learnPairs, applyCorrections, mergePairs } = require('./lib/corrections');
 const { diarizeTrack } = require('./lib/diarize');
 
@@ -46,6 +48,7 @@ let state = 'idle'; // meeting recorder: idle | recording | processing
 let rec = null;     // active recording (see startRecording)
 let dict = null;    // dictation in progress: { webmPath, stream }
 let dictBusy = false;
+let pendingMix = null; // archive mixdown still running after the notes were written
 
 function uiSend(channel, ...args) {
   if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send(channel, ...args);
@@ -174,6 +177,7 @@ function stopRecording() {
   if (state !== 'recording') return;
   setState('processing');
   uiSend('ui:progress', 'Finishing transcription…');
+  prewarm(); // load the summary model while the last segments transcribe
   win.webContents.executeJavaScript('window.__stop()', true)
     .catch((e) => console.error('stop failed:', e));
 }
@@ -234,7 +238,9 @@ async function transcribeSegment(job, seg) {
       vad: true,
       beam: 1,
       prompt: config.vocabPrompt() || undefined,
-      threads: state === 'recording' ? 4 : undefined, // leave CPU for the ongoing call
+      // during the call, stay on half the cores so the video call keeps its CPU;
+      // once it is over, catching up on the backlog gets the whole machine
+      threads: state === 'recording' ? 4 : undefined,
     });
     // whisper leaks the vocabulary prompt into (near-)silent audio — drop
     // parts made up entirely of glossary words
@@ -307,11 +313,16 @@ ipcMain.on('rec:done', async () => {
     if (QUIT_AFTER_NOTES) { app.exit(1); }
   }
   setState('idle');
-  if (QUIT_AFTER_NOTES) { console.log('[selftest] DONE'); setTimeout(() => app.quit(), 500); }
+  if (QUIT_AFTER_NOTES) {
+    await pendingMix; // the notes are already written; don't quit mid-mixdown
+    console.log('[selftest] DONE');
+    setTimeout(() => app.quit(), 500);
+  }
 });
 
-async function mixAudio(job) {
-  const finalPath = path.join(NOTES_DIR, `${job.stamp}.webm`);
+// Join each track's segments into one file per track. Stream copy, so this is
+// effectively free — unlike the mixdown, which re-encodes and runs afterwards.
+async function concatTracks(job) {
   const byTrack = {};
   for (const seg of job.segs.values()) {
     if (!fs.existsSync(seg.file) || fs.statSync(seg.file).size === 0) continue;
@@ -333,8 +344,21 @@ async function mixAudio(job) {
       trackFiles[track] = out;
     }
   }
+  if (Object.keys(trackFiles).length === 0) throw new Error('no audio was recorded');
+  return {
+    trackFiles,
+    cleanup: () => {
+      for (const seg of job.segs.values()) fs.rmSync(seg.file, { force: true });
+      for (const f of temp) fs.rmSync(f, { force: true });
+    },
+  };
+}
+
+// Mix the per-track files down to the archive recording (re-encodes ~56x
+// realtime, so a long meeting costs real seconds — keep it off the notes path).
+async function mixDown(job, trackFiles) {
+  const finalPath = path.join(NOTES_DIR, `${job.stamp}.webm`);
   const files = Object.values(trackFiles);
-  if (files.length === 0) throw new Error('no audio was recorded');
   if (files.length === 1) {
     fs.copyFileSync(files[0], finalPath);
   } else {
@@ -344,14 +368,7 @@ async function mixAudio(job) {
       '-map', '[a]', '-c:a', 'libopus', '-b:a', '64000', finalPath,
     ]);
   }
-  return {
-    finalPath,
-    micPath: trackFiles.mic || null,
-    cleanup: () => {
-      for (const seg of job.segs.values()) fs.rmSync(seg.file, { force: true });
-      for (const f of temp) fs.rmSync(f, { force: true });
-    },
-  };
+  return finalPath;
 }
 
 // several people share this microphone → split the mic track into speakers
@@ -385,12 +402,10 @@ async function diarizeMic(job, micPath) {
 async function processRecording(job) {
   const mdPath = path.join(NOTES_DIR, `${job.stamp}.md`);
   console.log('Waiting for live transcription to finish…');
+  uiSend('ui:progress', 'Finishing transcription…');
   await job.liveQueue;
-  console.log('Mixing audio…');
-  uiSend('ui:progress', 'Mixing audio…');
-  const mixed = await mixAudio(job);
-  if (cfg().multiSpeaker && mixed.micPath) await diarizeMic(job, mixed.micPath);
-  mixed.cleanup();
+  const audio = await concatTracks(job);
+  if (cfg().multiSpeaker && audio.trackFiles.mic) await diarizeMic(job, audio.trackFiles.mic);
   const turns = buildTurns(labeledResults(job, true));
   const transcript = turnsToMarkdown(turns);
   console.log('Summarizing…');
@@ -411,6 +426,11 @@ async function processRecording(job) {
   const n = new Notification({ title: 'Meeting notes ready', body: path.basename(mdPath) });
   n.on('click', () => { showMainWindow(); uiSend('ui:select-note', path.basename(mdPath)); });
   n.show();
+
+  // the notes are what you waited for; the archive recording can finish after
+  pendingMix = mixDown(job, audio.trackFiles)
+    .catch((err) => console.error('mixing the recording failed:', err.message || err))
+    .finally(() => audio.cleanup());
 }
 
 // ---------- main window ----------
@@ -532,6 +552,35 @@ ipcMain.handle('ui:save-note', (e, payload) => {
   return { ok: true, learned };
 });
 
+// regenerate the summary of an existing note from its (possibly edited)
+// transcript — also covers notes that never got one because Ollama was down
+let resummarizing = false;
+ipcMain.handle('ui:resummarize', async (e, file) => {
+  if (resummarizing) return { ok: false, error: 'Already summarizing' };
+  const name = path.basename(String(file));
+  const p = path.join(NOTES_DIR, name);
+  if (!name.endsWith('.md') || !fs.existsSync(p)) return { ok: false, error: 'Note not found' };
+  const { title, lang, transcript } = parseNote(fs.readFileSync(p, 'utf8'));
+  if (!transcript) return { ok: false, error: 'This note has no transcript' };
+  resummarizing = true;
+  try {
+    uiSend('ui:progress', 'Summarizing…');
+    const summary = await summarize(transcript, lang, { onProgress: (t) => uiSend('ui:progress', t) });
+    if (!summary) return { ok: false, error: 'No summarizer available — is Ollama running?' };
+    const stamp = name.replace(/\.md$/, '');
+    // a hand-edited title survives; the auto-generic one gets the fresh title
+    if (title && title !== `Meeting ${prettyStamp(stamp)}`) summary.title = title;
+    fs.writeFileSync(p, buildMarkdown(stamp, lang, transcript, summary), 'utf8');
+    uiSend('ui:notes-changed', name);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: String(err.message || err) };
+  } finally {
+    resummarizing = false;
+    uiSend('ui:progress', '');
+  }
+});
+
 ipcMain.handle('ui:fix-dictation', (e, payload) => {
   const entry = dictHistory.find((d) => d.ts === payload.ts);
   if (!entry) return { ok: false };
@@ -599,9 +648,24 @@ function toggleDictation() {
   }
 }
 
+// dictation records 16kHz mono PCM straight from the renderer — no ffmpeg
+// conversion step between stop and whisper
+const WAV_HEADER = 44;
+
+function writeWavHeader(fd, dataLen) {
+  const h = Buffer.alloc(WAV_HEADER);
+  h.write('RIFF', 0); h.writeUInt32LE(36 + dataLen, 4); h.write('WAVE', 8);
+  h.write('fmt ', 12); h.writeUInt32LE(16, 16); h.writeUInt16LE(1, 20); h.writeUInt16LE(1, 22);
+  h.writeUInt32LE(16000, 24); h.writeUInt32LE(16000 * 2, 28); h.writeUInt16LE(2, 32); h.writeUInt16LE(16, 34);
+  h.write('data', 36); h.writeUInt32LE(dataLen, 40);
+  fs.writeSync(fd, h, 0, WAV_HEADER, 0);
+}
+
 function startDictation() {
-  dict = { webmPath: path.join(os.tmpdir(), `dictate-${Date.now()}.webm`) };
-  dict.stream = fs.createWriteStream(dict.webmPath);
+  dict = { wavPath: path.join(os.tmpdir(), `dictate-${Date.now()}.wav`), bytes: 0 };
+  dict.stream = fs.createWriteStream(dict.wavPath);
+  dict.stream.write(Buffer.alloc(WAV_HEADER)); // placeholder, patched at stop
+  prewarmCleanup(); // load the polish model while the user talks
   overlayShow('listening', hotkeyLabel());
   win.webContents.executeJavaScript('window.__dictStart()', true).catch((e) => {
     console.error('dictation start failed:', e);
@@ -615,7 +679,7 @@ function startDictation() {
 function cancelDictation() {
   if (dict) {
     try { dict.stream.close(); } catch {}
-    fs.rmSync(dict.webmPath, { force: true });
+    fs.rmSync(dict.wavPath, { force: true });
   }
   dict = null;
 }
@@ -627,14 +691,89 @@ public class U {
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
 }`;
 
+// ---------- persistent PowerShell helper ----------
+// Spawning powershell.exe + compiling Add-Type costs ~0.75-1s per call, which
+// used to sit on the paste path of every dictation. One long-lived helper
+// process compiles once and then answers over stdin/stdout in ~0.1s.
+
+const HELPER_PS1 = `$ErrorActionPreference = 'SilentlyContinue'
+Add-Type '${USER32}'
+$w = New-Object -ComObject wscript.shell
+while ($true) {
+  $line = [Console]::In.ReadLine()
+  if ($null -eq $line) { break }
+  $parts = $line.Split(' ')
+  if ($parts[0] -eq 'GETFG') {
+    [Console]::Out.WriteLine([U]::GetForegroundWindow())
+  } elseif ($parts[0] -eq 'PASTE') {
+    if ($parts.Length -gt 1 -and $parts[1] -match '^\\d+$') {
+      [U]::SetForegroundWindow([IntPtr][Int64]$parts[1]) | Out-Null
+      Start-Sleep -Milliseconds 150
+    }
+    $w.SendKeys('^v')
+    [Console]::Out.WriteLine('OK')
+  } else {
+    [Console]::Out.WriteLine('ERR')
+  }
+}`;
+
+let psHelper = null;      // child process
+let psPending = [];       // FIFO of resolvers, one per outstanding command
+let psBuf = '';
+
+function ensurePsHelper() {
+  if (psHelper && psHelper.exitCode === null) return;
+  const script = path.join(os.tmpdir(), 'turtle-talks-helper.ps1');
+  fs.writeFileSync(script, HELPER_PS1);
+  psHelper = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script], { windowsHide: true });
+  psBuf = '';
+  psHelper.stdout.on('data', (d) => {
+    psBuf += d;
+    let i;
+    while ((i = psBuf.indexOf('\n')) >= 0) {
+      const line = psBuf.slice(0, i).trim();
+      psBuf = psBuf.slice(i + 1);
+      const next = psPending.shift();
+      if (next) next(line);
+    }
+  });
+  psHelper.on('close', () => {
+    for (const p of psPending) p(null);
+    psPending = [];
+    psHelper = null;
+  });
+  psHelper.on('error', () => {});
+}
+
+function psCmd(cmd, timeoutMs) {
+  return new Promise((resolve) => {
+    ensurePsHelper();
+    if (!psHelper) return resolve(null);
+    const timer = setTimeout(() => {
+      const i = psPending.indexOf(done);
+      if (i >= 0) psPending.splice(i, 1);
+      resolve(null);
+    }, timeoutMs);
+    const done = (line) => { clearTimeout(timer); resolve(line); };
+    psPending.push(done);
+    try { psHelper.stdin.write(`${cmd}\n`); } catch { done(null); }
+  });
+}
+
 // remember which window the user was dictating into, so a slow transcription
-// can't paste into whatever happens to be focused later
-function getForegroundWindow() {
+// can't paste into whatever happens to be focused later.
+// null from the helper falls back to a one-shot powershell.
+async function getForegroundWindow() {
+  const fg = await psCmd('GETFG', 3000);
+  if (fg !== null) return fg;
   return runPs(`Add-Type '${USER32}'; [U]::GetForegroundWindow()`);
 }
 
-function sendPaste(hwnd) {
-  const activate = hwnd && /^\d+$/.test(hwnd)
+async function sendPaste(hwnd) {
+  const arg = hwnd && /^\d+$/.test(hwnd) ? ` ${hwnd}` : '';
+  const ok = await psCmd(`PASTE${arg}`, 5000);
+  if (ok !== null) return;
+  const activate = arg
     ? `Add-Type '${USER32}'; [U]::SetForegroundWindow([IntPtr]${hwnd}) | Out-Null; Start-Sleep -Milliseconds 150; `
     : '';
   return runPs(`${activate}$w = New-Object -ComObject wscript.shell; $w.SendKeys('^v')`);
@@ -687,7 +826,12 @@ function pushDictHistory(entry) {
   uiSend('ui:dict', dictHistory);
 }
 
-ipcMain.on('dict:chunk', (e, data) => { if (dict) dict.stream.write(Buffer.from(data)); });
+ipcMain.on('dict:chunk', (e, data) => {
+  if (!dict) return;
+  const buf = Buffer.from(data);
+  dict.bytes += buf.length;
+  dict.stream.write(buf);
+});
 ipcMain.on('dict:error', (e, msg) => {
   console.error('dictation error:', msg);
   cancelDictation();
@@ -700,19 +844,32 @@ ipcMain.on('dict:done', async () => {
   const job = dict;
   dict = null;
   dictBusy = true;
-  const wavPath = job.webmPath.replace(/\.webm$/, '.wav');
   try {
     const hwndPromise = getForegroundWindow(); // where the user was when they stopped
     await new Promise((res) => job.stream.end(res));
+    // patch the real data length into the WAV header
+    const fd = fs.openSync(job.wavPath, 'r+');
+    writeWavHeader(fd, job.bytes);
+    fs.closeSync(fd);
     overlayShow('transcribing');
-    await toWav(job.webmPath, wavPath);
-    const raw = await transcribe(wavPath, cfg().dictLang, BASE_DIR, {
-      modelName: cfg().dictModel,
-      suppressNonSpeech: true,
-      beam: 1,
-      prompt: config.vocabPrompt() || undefined,
-    });
-    const text = applyCorrections(cleanDictation(raw), cfg().corrections);
+    let raw;
+    try {
+      // GPU path (OpenVINO) — ~1-2s instead of ~4s
+      raw = await ov.transcribe(job.wavPath, cfg().dictLang, config.vocabPrompt());
+      console.log('[dict] transcribed on GPU (OpenVINO)');
+    } catch {
+      raw = await transcribe(job.wavPath, cfg().dictLang, BASE_DIR, {
+        modelName: cfg().dictModel,
+        suppressNonSpeech: true,
+        beam: 1,
+        prompt: config.vocabPrompt() || undefined,
+      });
+    }
+    let text = applyCorrections(cleanDictation(raw), cfg().corrections);
+    if (text && cfg().dictCleanup) {
+      overlayShow('polishing');
+      text = await cleanupDictation(text); // falls back to the raw text on any failure
+    }
     if (!text) {
       overlayShow('empty');
       overlayHide(1500);
@@ -736,8 +893,7 @@ ipcMain.on('dict:done', async () => {
     overlayShow('error', String(err.message || err).slice(0, 60));
     overlayHide(2500);
   } finally {
-    fs.rmSync(job.webmPath, { force: true });
-    fs.rmSync(wavPath, { force: true });
+    fs.rmSync(job.wavPath, { force: true });
     dictBusy = false;
     if (DICTTEST) setTimeout(() => app.quit(), 400);
   }
@@ -800,7 +956,17 @@ watcher.on('meeting-stop', () => {
 
 app.on('window-all-closed', () => { /* keep running in the tray */ });
 app.on('will-quit', () => { if (app.isReady()) globalShortcut.unregisterAll(); });
-app.on('before-quit', () => { quitting = true; });
+app.on('before-quit', (e) => {
+  quitting = true;
+  // don't kill an archive mixdown that is still running in the background —
+  // it would leave a partial .webm (the raw segments do survive)
+  if (pendingMix) {
+    e.preventDefault();
+    const wait = pendingMix;
+    pendingMix = null;
+    Promise.race([wait, new Promise((r) => setTimeout(r, 90000))]).then(() => app.quit());
+  }
+});
 app.on('second-instance', () => showMainWindow());
 
 if (!app.requestSingleInstanceLock()) {
@@ -828,6 +994,8 @@ if (!app.requestSingleInstanceLock()) {
     tray = new Tray(icon('idle'));
     tray.on('click', () => showMainWindow());
     updateTray();
+    ensurePsHelper(); // compile the paste helper before the first dictation
+    ov.start();       // load the GPU transcription model in the background
 
     const TESTMODE = SELFTEST || DICTTEST || NUDGETEST;
     if (!TESTMODE) showMainWindow();

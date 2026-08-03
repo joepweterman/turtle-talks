@@ -44,6 +44,9 @@
       } else if (mode === 'transcribing') {
         dot.style.background = '#f59e0b';
         label.textContent = 'Transcribing…';
+      } else if (mode === 'polishing') {
+        dot.style.background = '#8fa86b';
+        label.textContent = 'Polishing…';
       } else if (mode === 'done') {
         dot.className = '';
         dot.style.background = '#8fa86b';

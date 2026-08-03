@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('api', {
   listNotes: () => ipcRenderer.invoke('ui:list-notes'),
   readNote: (file) => ipcRenderer.invoke('ui:read-note', file),
   saveNote: (file, content) => ipcRenderer.invoke('ui:save-note', { file, content }),
+  resummarize: (file) => ipcRenderer.invoke('ui:resummarize', file),
   start: (lang) => ipcRenderer.send('ui:start', lang),
   stop: () => ipcRenderer.send('ui:stop'),
   openFolder: () => ipcRenderer.send('ui:open-folder'),

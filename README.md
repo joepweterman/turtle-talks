@@ -21,8 +21,11 @@ click the tray icon (or the desktop icon again) to bring it back.
 Notes get an **auto-generated title** from the summary step (for example
 "Ajax speelt tegen Volendam vandaag") and can be **edited in place**: open a
 note, hit Edit, change the title or the markdown body, Save writes it straight
-back to the file. "View all dictations" shows everything you've ever dictated
-(stored locally in `MeetingNotes\dictations.jsonl`), with per-item copy.
+back to the file. **Re-summarize** regenerates a note's summary from its
+(possibly edited) transcript — also the fix for notes that never got a summary
+because no summarizer was running at the time. "View all dictations" shows
+everything you've ever dictated (stored locally in
+`MeetingNotes\dictations.jsonl`), with per-item copy.
 
 The **Settings** screen (top right) covers your name (used as your speaker
 label), a personal **vocabulary** so whisper recognises names and jargon, the
@@ -84,6 +87,19 @@ cursor (and left in the clipboard as a fallback). The language is
 **auto-detected per utterance**, so you can dictate Dutch in one message and
 English in the next without touching any setting.
 
+**Polish dictations with AI** (Settings, off by default): a local Ollama model
+strips filler words ("uh", "nou ja"), applies self-corrections ("send it
+Monday... no wait, Tuesday" pastes as "send it Tuesday") and fixes punctuation
+before pasting. Adds a second or two; the raw transcription is always the
+fallback, so a failed polish can never eat a dictation. Works best with an
+8B-class model — small models were tested and translate or mangle Dutch.
+
+**GPU dictation (Intel iGPU/Arc, optional):** run
+`powershell -ExecutionPolicy Bypass -File scripts/setup-openvino.ps1` once
+(needs Python 3.12). Dictation then transcribes on the GPU via OpenVINO —
+~1-2s for a typical utterance instead of ~4s, using the more accurate
+`medium` model. Without it, dictation simply stays on whisper.cpp.
+
 Dictation uses the faster `small` whisper model by default so short utterances
 come back in a few seconds. Configure in `.env`:
 
@@ -140,6 +156,21 @@ folder or there.
 - **Fully local (default)**: install [Ollama](https://ollama.com/download) and
   pull a model: `ollama pull llama3.1:8b` (set via `OLLAMA_MODEL` in `.env`).
   If Ollama is running, it is always used first — nothing leaves your machine.
+
+  **On a laptop with an integrated GPU, enable it — summarizing gets 6-8x
+  faster.** Ollama detects integrated GPUs but skips them by default, so an
+  Intel Arc or AMD Radeon iGPU sits idle while the CPU does the work. Set both
+  of these once and restart Ollama:
+
+  ```powershell
+  [Environment]::SetEnvironmentVariable("OLLAMA_VULKAN", "1", "User")
+  [Environment]::SetEnvironmentVariable("OLLAMA_IGPU_ENABLE", "1", "User")
+  ```
+
+  Check it took effect with `ollama ps` while a model is loaded: `PROCESSOR`
+  should say GPU, not CPU. On an Arc 140V this took prompt processing from
+  ~30 to ~300 tokens/s, turning a long meeting's summary from ~10 minutes
+  into ~1.
 - **Claude API**: copy `.env.example` to `.env` and set `ANTHROPIC_API_KEY`.
   Used only when Ollama isn't available. The request is sent with Anthropic's
   server-side refusal fallback enabled, so a summary comes back even if a
